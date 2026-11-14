@@ -42,8 +42,6 @@ export function buildConfig(env = process.env) {
       phone: env.ARTURITO_PHONE || '',
       sendUrl: env.ARTURITO_SEND_URL || '',
       sendKey: env.ARTURITO_SEND_KEY || '',
-      registerUrl: env.ARTURITO_REGISTER_URL || '',
-      registerToken: env.ARTURITO_REGISTER_TOKEN || env.ARTURITO_SEND_KEY || '',
       webhookToken: env.ARTURITO_WEBHOOK_TOKEN || '',
       sendLimitPerMinute: Number(env.ARTURITO_SEND_LIMIT_PER_MINUTE || 6),
     },

@@ -2,9 +2,9 @@
 
 ## P0 (bloquea lanzamiento)
 
-- [ ] [operator-only] Renombrar `env.example` a `.env.example` (la sesión que lo creó no podía escribir rutas `.env*`).
+- [ ] [operator-only] Renombrar `env.example` a `.env.example` con `git mv` (las sesiones de agente no pueden escribir rutas `.env*`) y borrar las notas del README y del encabezado del archivo.
 - [ ] [operator-only] Confirmar con Pey la forma real de `POST /charges` y del webhook (campos, firma, estados) y ajustar `HttpPeyClient`.
-- [ ] [operator-only] Confirmar el endpoint y payload del registry de Arturito; apuntar `ARTURITO_REGISTER_URL`.
+- [ ] [operator-only] Probar el registry contra un Arturito real (`POST`/`DELETE <ARTURITO_SEND_URL>/registry`, ya implementado según su contrato) y confirmar que el envío al JID `52` llega.
 - [ ] [claude-can-do] Pasar `Store` a SQLite (misma interfaz) y la cola de salida a algo persistente.
 - [ ] [claude-can-do] Mapear chats `@lid` a participantes (hoy se ignoran).
 

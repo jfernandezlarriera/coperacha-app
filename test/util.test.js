@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isValidClabe, makeClabe } from '../src/util/clabe.js';
-import { normalizePhone, phoneFromChatId, chatIdForPhone } from '../src/util/phone.js';
+import { normalizePhone, phoneFromChatId, chatIdForPhone, registryChatIds, waMeLink } from '../src/util/phone.js';
 import { parsePesos, formatMXN } from '../src/util/money.js';
 import { zonedToUtc, utcToZonedInput, formatZoned } from '../src/util/time.js';
 import { encodeSigned, decodeSigned } from '../src/util/cookies.js';
@@ -26,7 +26,13 @@ test('phones normalize to 52 + 10 digits and map to chatIds', () => {
   assert.equal(normalizePhone('12'), null);
   assert.equal(chatIdForPhone('525512345678'), '525512345678@s.whatsapp.net');
   assert.equal(phoneFromChatId('5215512345678@s.whatsapp.net'), '525512345678');
+  assert.equal(phoneFromChatId('525512345678@s.whatsapp.net'), '525512345678');
   assert.equal(phoneFromChatId('123456@lid'), null);
+  assert.deepEqual(registryChatIds('525512345678'), ['5215512345678@s.whatsapp.net', '525512345678@s.whatsapp.net']);
+  assert.deepEqual(registryChatIds('5215512345678'), registryChatIds('5512345678'));
+  assert.deepEqual(registryChatIds('14155550123'), ['14155550123@s.whatsapp.net']);
+  assert.deepEqual(registryChatIds('12'), []);
+  assert.equal(waMeLink('525512345678', 'hola'), 'https://wa.me/525512345678?text=hola', 'wa.me keeps the 52 form');
 });
 
 test('money parses pesos to centavos and formats MXN', () => {

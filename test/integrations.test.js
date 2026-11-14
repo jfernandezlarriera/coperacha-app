@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { OutboundQueue } from '../src/integrations/outbound-queue.js';
-import { MockArturitoClient } from '../src/integrations/arturito.js';
+import { MockArturitoClient, HttpArturitoClient, registryUrl } from '../src/integrations/arturito.js';
+import { buildConfig } from '../src/config.js';
 import { MockPeyClient, PeyWebhookError } from '../src/integrations/pey.js';
 import { InboundHandler, parseCommand } from '../src/whatsapp/inbound.js';
 import { makeSystem, makeColecta, join } from './helpers.js';
@@ -106,4 +107,76 @@ test('inbound handler serves joined numbers, ignores unknown chats and never lea
   assert.equal(sys.service.votingBoard(c.id).votes[0].voter, `p:${a.id}`);
   assert.match(await h.handle({ chatId: chat, type: 'text', messageId: 'm8', text: 'votar 9' }), /Opciones/);
   assert.match(await h.handle({ chatId: '525511112222@lid', type: 'text', messageId: 'm9', text: 'menu' }) ?? '', /^$/ , '@lid without mapping is a no-op');
+});
+
+// Fake fetch: records every call and answers with the given status. No network.
+function fakeFetch(status = 200) {
+  const calls = [];
+  const impl = async (url, init) => {
+    calls.push({ url, method: init.method, headers: init.headers, body: JSON.parse(init.body) });
+    if (status instanceof Error) throw status;
+    return { status };
+  };
+  return { calls, impl };
+}
+
+test('arturito register/unregister: POST/DELETE <send url>/registry with only {chatId} and the bot key', async () => {
+  const f = fakeFetch(200);
+  const client = new HttpArturitoClient({ sendUrl: 'https://arturito.test/api/send/', sendKey: 'bot-key', fetchImpl: f.impl });
+  const res = await client.register({ phone: '525512345678', role: 'participant', colectaId: 'c1' });
+  assert.equal(res.status, 200);
+  assert.deepEqual(f.calls.map((c) => c.body), [
+    { chatId: '5215512345678@s.whatsapp.net' },
+    { chatId: '525512345678@s.whatsapp.net' },
+  ], '521 JID first (what inbound events carry), then the 52 form used for outbound sends');
+  for (const call of f.calls) {
+    assert.equal(call.url, 'https://arturito.test/api/send/registry');
+    assert.equal(call.method, 'POST');
+    assert.equal(call.headers.authorization, 'Bearer bot-key');
+  }
+
+  await client.unregister({ phone: '5215512345678', role: 'participant', colectaId: 'c1' });
+  assert.deepEqual(f.calls.slice(2).map((c) => [c.method, c.url, c.body]), [
+    ['DELETE', 'https://arturito.test/api/send/registry', { chatId: '5215512345678@s.whatsapp.net' }],
+    ['DELETE', 'https://arturito.test/api/send/registry', { chatId: '525512345678@s.whatsapp.net' }],
+  ]);
+
+  assert.equal(registryUrl('https://arturito.test/api/send'), 'https://arturito.test/api/send/registry');
+  assert.equal(registryUrl('https://arturito.test/api/send///'), 'https://arturito.test/api/send/registry');
+
+  await client.register({ phone: '14155550123', role: 'participant', colectaId: 'c1' });
+  assert.deepEqual(f.calls.slice(4).map((c) => c.body), [{ chatId: '14155550123@s.whatsapp.net' }], 'non-Mexican numbers register one chatId');
+});
+
+test('arturito register is skipped without send URL or key, and never throws on network errors', async () => {
+  const f = fakeFetch(200);
+  const noUrl = new HttpArturitoClient({ sendUrl: '', sendKey: 'bot-key', fetchImpl: f.impl });
+  const noKey = new HttpArturitoClient({ sendUrl: 'https://arturito.test/api/send', sendKey: '', fetchImpl: f.impl });
+  for (const client of [noUrl, noKey]) {
+    assert.deepEqual(await client.register({ phone: '525512345678', role: 'organizer', colectaId: 'c1' }), { status: 0, skipped: true });
+    assert.deepEqual(await client.unregister({ phone: '525512345678', role: 'organizer', colectaId: 'c1' }), { status: 0, skipped: true });
+  }
+  assert.equal(f.calls.length, 0);
+
+  const down = fakeFetch(new Error('ECONNREFUSED'));
+  const client = new HttpArturitoClient({ sendUrl: 'https://arturito.test/api/send', sendKey: 'bot-key', fetchImpl: down.impl });
+  const res = await client.register({ phone: '525512345678', role: 'organizer', colectaId: 'c1' });
+  assert.equal(res.error, true);
+  assert.equal(down.calls.length, 2, 'both chatIds are attempted');
+
+  const cfg = buildConfig({ ARTURITO_SEND_URL: 'https://arturito.test/api/send', ARTURITO_SEND_KEY: 'k' });
+  assert.deepEqual(Object.keys(cfg.arturito).sort(), ['phone', 'sendKey', 'sendLimitPerMinute', 'sendUrl', 'webhookToken']);
+});
+
+test('inbound finds the participant from the 52 or the 521 chatId; joining registers both forms', async () => {
+  const sys = makeSystem();
+  const c = await makeColecta(sys, { goalCents: 50000 });
+  await join(sys, c, { name: 'Ana', phone: '5511112222', mode: 'fixed', fixedCents: 20000 });
+  assert.deepEqual(sys.arturito.registrations.at(-1).chatIds, ['5215511112222@s.whatsapp.net', '525511112222@s.whatsapp.net']);
+  const h = new InboundHandler({ service: sys.service });
+  for (const chatId of ['525511112222@s.whatsapp.net', '5215511112222@s.whatsapp.net']) {
+    assert.match(await h.handle({ chatId, type: 'text', messageId: 'm', text: 'mi monto' }), /\$200\.00/);
+  }
+  assert.equal(await h.handle({ chatId: '5215511112223@s.whatsapp.net', type: 'text', messageId: 'm', text: 'mi monto' }), null);
+  assert.equal(await h.handle({ chatId: '5215511112222@lid', type: 'text', messageId: 'm', text: 'mi monto' }), null, '@lid has no mapping');
 });

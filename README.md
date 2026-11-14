@@ -87,10 +87,15 @@ con la ganadora, con una propuesta concreta o con su propia elección.
 
 ## Variables de entorno
 
+> Nota: la plantilla todavía está en el repo como `env.example` porque las sesiones de agente
+> no pueden escribir rutas `.env*`. Falta un `git mv env.example .env.example` a mano (mientras
+> tanto: `cp env.example .env`); después hay que borrar esta nota y la del encabezado del
+> archivo.
+
 Nombres en `.env.example` (comentados): `PORT`, `APP_BASE_URL`, `SESSION_SECRET`,
 `COOKIE_SECURE`, `DATABASE_PATH`, `APP_TIMEZONE`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `GOOGLE_REDIRECT_URI`, `AUTH_DEV_LOGIN`, `ARTURITO_PHONE`, `ARTURITO_SEND_URL`,
-`ARTURITO_SEND_KEY`, `ARTURITO_REGISTER_URL`, `ARTURITO_REGISTER_TOKEN`,
+`ARTURITO_SEND_KEY`,
 `ARTURITO_WEBHOOK_TOKEN`, `ARTURITO_SEND_LIMIT_PER_MINUTE`, `PEY_MODE`, `PEY_API_URL`,
 `PEY_API_KEY`, `PEY_WEBHOOK_SECRET`.
 
@@ -104,9 +109,19 @@ Esta app es cliente del bot Arturito; no modifica ese repo.
   reintenta a los 30 s, hasta 5 veces). Todo pasa por `OutboundQueue`: ventana deslizante de
   6 mensajes por minuto, FIFO, sin ráfagas.
 - **Registro**: al crear una colecta y al sumarse alguien, `ArturitoClient.register` hace
-  `POST ARTURITO_REGISTER_URL` con `{phone, chatId, app:"coperacha", role}` y Bearer
-  `ARTURITO_REGISTER_TOKEN` (o `ARTURITO_SEND_KEY`). Es la suposición de esta app sobre el
-  registry de Arturito; si la URL está vacía se registra un log y se sigue.
+  `POST <ARTURITO_SEND_URL>/registry` con cuerpo `{chatId}` (nada más) y
+  `Authorization: Bearer ARTURITO_SEND_KEY`; `unregister` hace `DELETE` a la misma ruta con el
+  mismo cuerpo (hoy ningún flujo lo llama). No hay URL ni token de registro aparte. La ruta se
+  arma tolerando una `/` final en `ARTURITO_SEND_URL`. Si falta `ARTURITO_SEND_URL` o
+  `ARTURITO_SEND_KEY` se omite el registro, se deja un log (sin la llave) y se sigue.
+- **52 vs 521**: Arturito compara `chatId` de forma exacta y no normaliza. Para un celular
+  mexicano se registran las dos formas: primero `521` + 10 dígitos + `@s.whatsapp.net` (el JID
+  con el que suelen llegar los mensajes) y luego `52` + 10 dígitos (la forma que esta app
+  guarda y usa para enviar). Los eventos entrantes con cualquiera de las dos formas encuentran
+  al mismo participante.
+- **`@lid` (pregunta abierta)**: si un evento llega con un `chatId` `@lid` no hay forma de
+  mapearlo a un teléfono, así que hoy es un no-op y no se registra nada. Puede hacer falta que
+  Coperacha registre el `@lid` cuando llegue uno; está pendiente de definir con Arturito.
 - **Entrada**: `POST /webhooks/arturito` con `Authorization: Bearer ARTURITO_WEBHOOK_TOKEN` y
   cuerpo `{chatId, type, messageId, text}` (o `{events:[...]}`). Sólo responde a números ya
   sumados a una colecta activa (si están en varias, la más reciente). Comandos: `menu`,
@@ -116,7 +131,8 @@ Esta app es cliente del bot Arturito; no modifica ese repo.
   alcanzada (al organizador, con link para confirmar), recordatorio 24 h antes del cierre,
   cobro CoDi, vencimiento con las tres salidas, reapertura, cancelación y regalo elegido.
 - Teléfonos: se guardan como dígitos internacionales (`52` + 10 dígitos; el `521` viejo se
-  normaliza). `ARTURITO_PHONE` en ese mismo formato para el link `wa.me`.
+  normaliza al guardar). `ARTURITO_PHONE` en ese mismo formato (sin el `1` extra) para el link
+  `wa.me`.
 
 ## Pey (CoDi)
 

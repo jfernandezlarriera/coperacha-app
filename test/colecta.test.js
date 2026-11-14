@@ -12,7 +12,10 @@ test('create validates CLABE, phone and future deadline; registers organizer wit
   const c = await makeColecta(sys);
   assert.match(c.code, /^[A-Za-z0-9_-]{8}$/);
   assert.equal(c.status, 'open');
-  assert.deepEqual(sys.arturito.registrations[0], { phone: '525512345678', role: 'organizer', colectaId: c.id });
+  assert.deepEqual(sys.arturito.registrations[0], {
+    phone: '525512345678', role: 'organizer', colectaId: c.id,
+    chatIds: ['5215512345678@s.whatsapp.net', '525512345678@s.whatsapp.net'],
+  });
 });
 
 test('all-or-nothing: no charge until goal reached and organizer confirms', async () => {
