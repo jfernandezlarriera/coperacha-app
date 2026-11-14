@@ -1,0 +1,17 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local data
+*.sqlite
+*.sqlite-journal
+*.db
+data/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS / editors
+.DS_Store
