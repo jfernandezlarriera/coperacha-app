@@ -11,5 +11,7 @@
     "start": "node src/server.js",
     "test": "node --test test/"
   },
-  "dependencies": {}
+  "dependencies": {
+    "standardwebhooks": "^1.1.1"
+  }
 }

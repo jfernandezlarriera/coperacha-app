@@ -25,8 +25,8 @@ faltan llaves. Es un objeto JSON con estas llaves:
   `GOOGLE_REDIRECT_URI` (`https://app.coperacha.app/auth/google/callback`), `ARTURITO_PHONE`,
   `ARTURITO_SEND_URL`, `ARTURITO_SEND_KEY`, `ARTURITO_WEBHOOK_TOKEN`,
   `ARTURITO_SEND_LIMIT_PER_MINUTE`.
-- Opcionales (sólo se conectan si están en el secreto; con `PEY_MODE=mock` no hacen falta):
-  `PEY_API_URL`, `PEY_API_KEY`, `PEY_WEBHOOK_SECRET`.
+- También requeridos para `PEY_MODE=http`: `PEY_API_KEY`, `PEY_WEBHOOK_SECRET`.
+- Opcional: `PEY_API_URL` (si falta, la app usa `https://api.pey.mx`).
 
 Para revisar las llaves el script lee el secreto y compara sólo los nombres; los valores no
 se imprimen ni se guardan. App Runner los inyecta como variables de entorno al arrancar.
@@ -50,7 +50,7 @@ Las políticas IAM están en `infra/policies/` con marcadores (`__SECRET_ARN__`,
 
 Variables no secretas que configura el script: `PORT=3000`,
 `APP_BASE_URL=https://app.coperacha.app`, `COOKIE_SECURE=true`,
-`APP_TIMEZONE=America/Mexico_City`, `PEY_MODE=mock`, `AUTH_DEV_LOGIN=false`, `AWS_REGION`,
+`APP_TIMEZONE=America/Mexico_City`, `PEY_MODE=http`, `AUTH_DEV_LOGIN=false`, `AWS_REGION`,
 `DATABASE_S3_BUCKET`, `DATABASE_S3_KEY`.
 
 ## Dominio

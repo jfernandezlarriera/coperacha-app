@@ -21,7 +21,7 @@ export function buildSystem(config, overrides = {}) {
   const notifier = overrides.notifier || new Notifier({ queue, baseUrl: config.baseUrl });
   const pey = overrides.pey || (config.pey.mode === 'http'
     ? new HttpPeyClient(config.pey)
-    : new MockPeyClient({ webhookSecret: config.pey.webhookSecret || 'mock-secret' }));
+    : new MockPeyClient({ webhookSecret: config.pey.webhookSecret }));
   const service = new ColectaService({ store, notifier, pey, arturito, clock: overrides.clock });
   const inbound = new InboundHandler({ service });
   const googleAuth = overrides.googleAuth || new GoogleAuth(config.google);
@@ -29,8 +29,13 @@ export function buildSystem(config, overrides = {}) {
   return { store, arturito, queue, notifier, pey, service, inbound, googleAuth, server };
 }
 
-export function startDeadlineJob(service, intervalMs = 60_000) {
-  const run = () => service.sweepDeadlines().catch((err) => log.error('deadline.sweep.error', { error: err?.message }));
+// One timer for both sweeps. `pollPey` (PEY_MODE=http) also asks Pey for accounts that are
+// not active yet and for pending transactions; without it only app-side timeouts run.
+export function startDeadlineJob(service, intervalMs = 60_000, { pollPey = false } = {}) {
+  const run = () => service.sweepDeadlines()
+    .catch((err) => log.error('deadline.sweep.error', { error: err?.message }))
+    .then(() => service.sweepPey(undefined, { poll: pollPey }))
+    .catch((err) => log.error('pey.sweep.error', { error: err?.message }));
   run();
   const timer = setInterval(run, intervalMs);
   timer.unref();
@@ -49,7 +54,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // boot instead of starting empty on top of existing data.
   const store = await openStore(config);
   const system = buildSystem(config, { store });
-  startDeadlineJob(system.service);
+  startDeadlineJob(system.service, 60_000, { pollPey: config.pey.mode === 'http' });
   system.server.listen(config.port, () => {
     log.info('server.listening', { port: config.port, baseUrl: config.baseUrl, pey: config.pey.mode, arturitoSend: Boolean(config.arturito.sendUrl), s3Store: Boolean(config.databaseS3Bucket) });
   });

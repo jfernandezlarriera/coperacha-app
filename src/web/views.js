@@ -3,6 +3,28 @@
 import { esc, layout } from '../util/html.js';
 import { formatMXN } from '../util/money.js';
 import { formatZoned, utcToZonedInput } from '../util/time.js';
+import { isPreauthorizedClabe } from '../integrations/pey.js';
+
+const CHARGE_STATUS_LABEL = { pending: 'Pendiente', paid: 'Pagado', expired: 'Venció sin pagarse', failed: 'No se pudo enviar' };
+
+// Status of the organizer's account with Pey. Charges only go out once it is ACTIVE.
+function bankAccountCard(colecta) {
+  const tail = esc(String(colecta.clabe || '').slice(-4));
+  const direct = `Los cobros CoDi van directo a tu CLABE terminada en ${tail}; Coperacha nunca guarda dinero.`;
+  if (colecta.codiStatus === 'ACTIVE') {
+    return `<div class="card"><p><strong>Cuenta para cobros: Activa</strong></p><p class="hint">${direct}</p></div>`;
+  }
+  if (colecta.codiStatus === 'ERROR') {
+    return `<div class="error"><strong>Cuenta para cobros: Error.</strong> Pey no pudo activar tu CLABE terminada en ${tail}, así que no se pueden mandar cobros CoDi a esa cuenta. Revisa que la CLABE sea tuya y esté bien escrita; si lo está, crea una colecta nueva con otra CLABE.</div>`;
+  }
+  const label = colecta.codiStatus === 'PROCESSING' ? 'En revisión' : colecta.codiStatus === 'PENDING' ? 'En activación' : 'Por registrar';
+  const wait = isPreauthorizedClabe(colecta.clabe)
+    ? 'Tu CLABE ya está preautorizada con Pey, así que normalmente se activa al momento.'
+    : 'Pey tiene que activar tu CLABE y eso puede tardar hasta 5 días hábiles.';
+  return `<div class="card"><p><strong>Cuenta para cobros: ${label}</strong></p>
+<p>${wait} Mientras tanto tu colecta funciona normal: la gente se puede sumar, votar y ves el avance. Los cobros CoDi se mandan hasta que la cuenta esté activa; te avisamos por WhatsApp en cuanto quede lista.</p>
+<p class="hint">${direct}</p></div>`;
+}
 
 const STATUS_LABEL = {
   open: 'Abierta', goal_reached: 'Meta alcanzada', confirmed: 'Confirmada', failed: 'Venció sin llegar', cancelled: 'Cancelada',
@@ -71,7 +93,8 @@ ${configFields(values)}
 <label>Tu nombre<input type="text" name="organizerName" value="${esc(values.organizerName || organizer.name)}" required></label>
 <label>Tu WhatsApp<input type="text" name="organizerPhone" inputmode="tel" placeholder="55 1234 5678" value="${esc(values.organizerPhone || '')}" required></label>
 <label>CLABE donde recibes los pagos<input type="text" name="clabe" inputmode="numeric" maxlength="18" value="${esc(values.clabe || '')}" required>
-<p class="hint">18 dígitos. Cada cobro CoDi va directo a esta cuenta; Coperacha nunca guarda dinero.</p></label>
+<p class="hint">18 dígitos. Cada cobro CoDi va directo a esta CLABE; Coperacha nunca guarda dinero.</p>
+<p class="hint">Al crear la colecta registramos tu CLABE con Pey para poder mandar los cobros. La activación puede tardar hasta 5 días hábiles (si tu CLABE ya está preautorizada con Pey, normalmente es al momento). Mientras tanto tu colecta funciona normal: la gente se suma, vota y ves el avance. Los cobros CoDi salen cuando la cuenta esté activa, y te avisamos por WhatsApp.</p></label>
 <button>Crear colecta</button>
 </form>`;
   return layout({ title: 'Nueva colecta', body, nav: navFor(organizer, authDev) });
@@ -111,7 +134,11 @@ export function organizerColectaPage({ organizer, summary, stats, board, myVote,
   const { colecta } = summary;
   const id = esc(colecta.id);
   let actions = '';
-  if (colecta.status === 'goal_reached') {
+  if (colecta.status === 'goal_reached' && colecta.codiStatus !== 'ACTIVE') {
+    actions = colecta.codiStatus === 'ERROR'
+      ? `<div class="error"><strong>¡Se llegó a la meta!</strong> Pero no se pueden mandar los cobros CoDi porque Pey no pudo activar tu cuenta.</div>`
+      : `<div class="flash"><strong>¡Se llegó a la meta!</strong> Los cobros CoDi esperan a que Pey active tu cuenta (puede tardar hasta 5 días hábiles). En cuanto quede activa te avisamos por WhatsApp y aquí vas a poder confirmar y mandar los cobros.</div>`;
+  } else if (colecta.status === 'goal_reached') {
     actions = `<div class="ok"><strong>¡Se llegó a la meta!</strong> Al confirmar se congelan los montos y cada persona recibe su cobro CoDi.
 <form method="post" action="/colectas/${id}/confirm"><button>Confirmar y mandar cobros</button></form></div>`;
   } else if (colecta.status === 'failed') {
@@ -126,12 +153,14 @@ export function organizerColectaPage({ organizer, summary, stats, board, myVote,
   } else if (colecta.status === 'confirmed') {
     const paid = charges.filter((c) => c.status === 'paid').length;
     actions = `<div class="ok">Cobros enviados: ${paid} de ${charges.length} pagados.</div>
-<table><tr><th>Referencia</th><th>Monto</th><th>Estado</th></tr>${charges.map((c) => `<tr><td><code>${esc(c.reference)}</code></td><td>${formatMXN(c.amountCents)}</td><td>${esc(c.status)}</td></tr>`).join('')}</table>`;
+<table><tr><th>Referencia</th><th>Monto</th><th>Estado</th></tr>${charges.map((c) => `<tr><td><code>${esc(c.reference)}</code></td><td>${formatMXN(c.amountCents)}</td><td>${esc(CHARGE_STATUS_LABEL[c.status] || c.status)}</td></tr>`).join('')}</table>
+<p class="hint">Cada cobro CoDi vence a las 24 horas. Pey no hace devoluciones: si alguien no paga, su cobro solo vence.</p>`;
   }
   const body = `<h1>${esc(colecta.finalGift || colecta.giftIdea || 'Regalo sorpresa')} ${status(colecta)}</h1>
 ${flash(msg)}${error(err)}
 <div class="card"><p><strong>Link para invitar</strong><br><code>${esc(link)}</code></p>
 <p><a class="btn secondary" href="${esc(waLink)}" target="_blank" rel="noopener">Compartir por WhatsApp</a></p></div>
+${['open', 'goal_reached', 'failed'].includes(colecta.status) ? bankAccountCard(colecta) : ''}
 <div class="card">${progressBar(summary)}
 <p><small>Vence ${esc(formatZoned(colecta.deadline))} · ${colecta.splitMode === 'equal' ? 'partes iguales' : 'monto libre'} · parte igual actual ${formatMXN(stats.shareCents)}</small></p>
 <p><small>Participan: ${stats.names.length ? stats.names.map(esc).join(', ') : 'nadie todavía'}. Los montos de cada quien se muestran solo al confirmar.</small></p>

@@ -10,7 +10,8 @@ Repo público. Nunca subir secretos, claves ni datos de usuarios. La landing viv
 
 ## Stack
 
-- Node.js 20, JavaScript (ESM), sin dependencias de npm: `node:http`, `node:test`, `fetch`.
+- Node.js 20, JavaScript (ESM): `node:http`, `node:test`, `fetch`. Una sola dependencia de
+  npm, `standardwebhooks`, para verificar los webhooks de Pey (`npm install` antes de correr).
 - Persistencia: un archivo JSON (`DATABASE_PATH`) con esquema en `src/db/schema.md`; la
   interfaz `Store` es el punto para pasar a SQLite. En producción el mismo JSON se guarda en
   S3 (ver «Persistencia en S3»).
@@ -19,7 +20,8 @@ Repo público. Nunca subir secretos, claves ni datos de usuarios. La landing viv
 
 ```bash
 cp .env.example .env        # llenar SESSION_SECRET; con AUTH_DEV_LOGIN=true no hace falta Google
-npm test                    # 46 tests, sin red
+npm install                 # una dependencia: standardwebhooks
+npm test                    # 53 tests, sin red
 npm start                   # http://localhost:3000
 ```
 
@@ -155,18 +157,40 @@ Esta app es cliente del bot Arturito; no modifica ese repo.
 
 ## Pey (CoDi)
 
-Interfaz mínima en `src/integrations/pey.js`:
+Cliente en `src/integrations/pey.js` contra `https://api.pey.mx` con
+`Authorization: Bearer PEY_API_KEY`. `PEY_MODE=mock` (default y tests) usa
+`MockPeyClient`, sin red; `PEY_MODE=http` usa `HttpPeyClient` y exige `PEY_API_KEY` y
+`PEY_WEBHOOK_SECRET` (`PEY_API_URL` es sólo un override opcional de la base).
 
-- `createCharge({reference, amountCents, concept, beneficiaryClabe, beneficiaryName, payerPhone})`
-  → `{chargeId, status, paymentUrl}`. Beneficiario = CLABE del organizador, siempre.
-- `parseWebhook({headers, rawBody})` → `{chargeId, status, reference}`; verifica
-  `x-pey-signature` (HMAC-SHA256 hex del cuerpo con `PEY_WEBHOOK_SECRET`) o
-  `Authorization: Bearer PEY_WEBHOOK_SECRET`; si no, 401.
+- **Cuenta del organizador**: al crear la colecta se valida la CLABE y se registra con
+  `POST /bank-account` (`{alias, name, clabe, entity: "PERSON"}`). Se guardan `bankAccountId`
+  y `codiStatus` (`PENDING`, `PROCESSING`, `ACTIVE`, `ERROR`) en la colecta; si el registro
+  falla, la colecta no se crea. Los cobros nunca llevan una CLABE, sólo el `bankAccountId`.
+  Las CLABEs preautorizadas por Pey (lista en `pey.js`) se activan al momento; cualquier otra
+  puede tardar hasta 5 días hábiles y la interfaz lo dice. Mientras tanto la colecta funciona
+  (sumarse, votar, avance), pero `confirm()` se rechaza y no hay botón de confirmar hasta que
+  la cuenta esté `ACTIVE`. Al activarse se avisa al organizador por WhatsApp; `ERROR` se
+  muestra en su panel.
+- **Cobros**: `POST /codi/pn` con `{amount, phoneNumber, concept, expiration, numRef,
+  bankAccountId, metadata}`: `amount` en pesos (convertido desde centavos sin flotantes),
+  `phoneNumber` de 10 dígitos, `expiration` 86400 s, `numRef` de hasta 7 dígitos y
+  `metadata = {reference, colecta, participant}`. Se guarda `transactionId` en el cobro. Si el
+  push falla se intenta `POST /codi/qr` y el `qrString` va en el mensaje de WhatsApp; si fallan
+  los dos, el cobro queda como `failed` (estado local).
+- **Sin devoluciones ni eventos de fallo**: Pey sólo informa `PENDING` o `PAID`. El
+  vencimiento es del lado de la app: un cobro que sigue pendiente después de su `expiresAt`
+  pasa a `expired`.
+- **Webhooks** (`POST /webhooks/pey`): se verifican con Standard Webhooks (paquete
+  `standardwebhooks`, headers `webhook-id`, `webhook-timestamp`, `webhook-signature`, secreto
+  `PEY_WEBHOOK_SECRET`) sobre el cuerpo crudo; firma inválida → 401. Se deduplica por
+  `webhook-id` (colección `webhookEvents`): una repetición responde 200 sin efecto.
+  `codi.pn.payment_received` y `codi.qr.payment_received` marcan el cobro como pagado (un id
+  desconocido responde 200); `bank.account.updated` actualiza `codiStatus`.
+- **Sondeo**: el job de cada minuto (`sweepPey`) marca los vencimientos y, con
+  `PEY_MODE=http`, consulta `GET /bank-account/{id}` de las cuentas que no están activas y
+  `GET /transaction/{id}` de los cobros pendientes. Es idempotente.
 
-`PEY_MODE=mock` (default y en tests) usa `MockPeyClient`, que registra cobros y arma webhooks
-firmados. `PEY_MODE=http` usa `HttpPeyClient` contra `PEY_API_URL/charges`; el formato del
-cuerpo y de los estados (`paid`, `failed`, `expired`, `pending`) es una suposición a ajustar
-contra el sandbox real. Los tests nunca tocan la red.
+Los tests usan el mock o un `fetch` falso; nunca tocan la red.
 
 ## Hosting
 
@@ -186,7 +210,6 @@ salida de WhatsApp sigue en memoria: lo que esté encolado se pierde en cada dep
 
 - Verificar el WhatsApp de cada participante con un código (hoy se confía en el número
   escrito; fuera de alcance del MVP).
-- Forma real de la API y los webhooks de Pey (sandbox): confirmar campos, firma y estados.
 - Registry de Arturito: confirmar endpoint y payload de registro.
 - Qué pasa si alguien no paga su cobro CoDi después de confirmar (reintento, recordatorio,
   reasignar).

@@ -6,6 +6,8 @@ import { isValidClabe, normalizeClabe } from '../util/clabe.js';
 import { resolveAmounts, progress } from './amounts.js';
 import { winner, tally, voteOf } from './voting.js';
 import { DomainError } from './errors.js';
+import { CODI_STATUSES, CHARGE_EXPIRATION_SECONDS, numRefFor } from '../integrations/pey.js';
+import { log } from '../logger.js';
 
 export const STATUS = {
   OPEN: 'open',
@@ -41,14 +43,22 @@ export class ColectaService {
     if (!isValidClabe(clabe)) throw new DomainError('La CLABE debe tener 18 dígitos válidos.');
     const organizerName = String(input.organizerName || '').trim();
     if (!organizerName) throw new DomainError('Escribe tu nombre.');
+    // Register the organizer's own CLABE with Pey before anything is stored: a failed
+    // registration must not leave a half-created colecta.
+    const code = newCode();
+    const account = await this.registerBankAccount({ code, organizerName, clabe });
+    if (!account) throw new DomainError('No pudimos registrar tu CLABE con Pey. Intenta de nuevo en unos minutos.', 502, 'pey_bank_account');
     const ts = this.now();
     const colecta = this.store.insert('colectas', {
       id: newId(),
-      code: newCode(),
+      code,
       organizerId: organizer.id,
       organizerName,
       organizerPhone: phone,
       clabe,
+      bankAccountId: account.id,
+      codiStatus: account.codiStatus,
+      codiStatusUpdatedAt: ts,
       ...fields,
       status: STATUS.OPEN,
       finalGift: null,
@@ -64,6 +74,18 @@ export class ColectaService {
     });
     await this.arturito.register({ phone, role: 'organizer', colectaId: colecta.id });
     return colecta;
+  }
+
+  // POST /bank-account for an organizer. Returns {id, codiStatus} or null when Pey fails.
+  async registerBankAccount({ code, organizerName, clabe }) {
+    try {
+      const account = await this.pey.createBankAccount({ alias: `Coperacha ${code}`, name: organizerName, clabe, entity: 'PERSON' });
+      if (!account?.id) return null;
+      return { id: account.id, codiStatus: CODI_STATUSES.has(account.codiStatus) ? account.codiStatus : 'PENDING' };
+    } catch (err) {
+      log.error('pey.bank_account.register_failed', { error: err?.message });
+      return null;
+    }
   }
 
   validateConfig(input, { requireAll = false } = {}) {
@@ -251,50 +273,159 @@ export class ColectaService {
     if (summary.colecta.status !== STATUS.GOAL_REACHED) {
       throw new DomainError('Todavía no se llega a la meta.', 409, 'goal_not_reached');
     }
+    if (summary.colecta.codiStatus !== 'ACTIVE' || !summary.colecta.bankAccountId) {
+      throw new DomainError('Los cobros CoDi salen cuando Pey active tu cuenta. Te avisamos por WhatsApp en cuanto quede lista.', 409, 'bank_account_not_active');
+    }
     const ts = this.now();
     for (const p of summary.participants) {
       this.store.update('participants', p.id, { finalCents: this.amountFor(summary, p) });
     }
     this.store.update('colectas', colecta.id, { status: STATUS.CONFIRMED, confirmedAt: ts, updatedAt: ts });
     const confirmed = this.summary(colecta.id);
+    const expiresAt = new Date(this.clock().getTime() + CHARGE_EXPIRATION_SECONDS * 1000).toISOString();
     const charges = [];
     for (const p of confirmed.participants) {
       const reference = `CP-${colecta.code}-${p.id.slice(0, 8)}`;
-      const created = await this.pey.createCharge({
-        reference,
+      const sent = await this.sendCharge({
         amountCents: p.finalCents,
         concept: `Coperacha ${colecta.finalGift || colecta.giftIdea || colecta.code}`.slice(0, 40),
-        beneficiaryClabe: colecta.clabe,
-        beneficiaryName: colecta.organizerName,
-        payerPhone: p.phone,
-      });
+        expirationSeconds: CHARGE_EXPIRATION_SECONDS,
+        numRef: numRefFor(reference),
+        bankAccountId: confirmed.colecta.bankAccountId,
+        metadata: { reference, colecta: colecta.code, participant: p.id },
+      }, p.phone);
       const charge = this.store.insert('charges', {
         id: newId(),
         colectaId: colecta.id,
         participantId: p.id,
-        peyChargeId: created.chargeId,
+        peyTransactionId: sent.transactionId,
+        codiId: sent.codiId,
+        method: sent.method,
+        qrString: sent.qrString,
         reference,
         amountCents: p.finalCents,
-        status: created.status || 'pending',
-        paymentUrl: created.paymentUrl || null,
+        // 'failed' is local only: Pey accepted neither the push nor the QR request.
+        status: sent.method ? 'pending' : 'failed',
+        expiresAt,
         createdAt: ts,
         updatedAt: ts,
       });
       charges.push(charge);
-      await this.notifier.charge(confirmed.colecta, p, charge);
+      if (sent.method) await this.notifier.charge(confirmed.colecta, p, charge);
     }
     return { summary: confirmed, charges };
+  }
+
+  // CoDi push notification first; QR as the fallback when the push cannot be created.
+  async sendCharge(request, phone) {
+    const reference = request.metadata.reference;
+    try {
+      const pn = await this.pey.createPushCharge({ ...request, phone });
+      if (pn?.transactionId) return { method: 'pn', transactionId: pn.transactionId, codiId: pn.codiId || null, qrString: null };
+    } catch (err) {
+      log.warn('pey.charge.pn_failed', { reference, error: err?.message });
+    }
+    try {
+      const qr = await this.pey.createQrCharge(request);
+      if (qr?.qrString) return { method: 'qr', transactionId: qr.transactionId || null, codiId: qr.codiId || null, qrString: qr.qrString };
+    } catch (err) {
+      log.error('pey.charge.qr_failed', { reference, error: err?.message });
+    }
+    return { method: null, transactionId: null, codiId: null, qrString: null };
   }
 
   charges(colectaId) {
     return this.store.find('charges', (c) => c.colectaId === colectaId);
   }
 
-  applyPaymentEvent({ chargeId, status }) {
-    const charge = this.store.findOne('charges', (c) => c.peyChargeId === chargeId);
+  // payment_received: marks the matching local charge paid. Unknown ids return null.
+  applyPaymentEvent({ transactionId, metadata = null }) {
+    const charge = this.store.findOne('charges', (c) => (transactionId && c.peyTransactionId === transactionId)
+      || (metadata?.reference && c.reference === metadata.reference));
     if (!charge) return null;
-    if (!['pending', 'paid', 'failed', 'expired'].includes(status)) return charge;
-    return this.store.update('charges', charge.id, { status, updatedAt: this.now() });
+    if (charge.status === 'paid') return charge;
+    return this.store.update('charges', charge.id, { status: 'paid', updatedAt: this.now() });
+  }
+
+  // Persists a new codiStatus on every colecta that uses the account and tells the
+  // organizer when it becomes ACTIVE. Returns the colectas that use the account.
+  async applyBankAccountStatus(bankAccountId, codiStatus) {
+    if (!bankAccountId || !CODI_STATUSES.has(codiStatus)) return [];
+    const matches = this.store.find('colectas', (c) => c.bankAccountId === bankAccountId);
+    for (const c of matches) {
+      if (c.codiStatus === codiStatus) continue;
+      const ts = this.now();
+      this.store.update('colectas', c.id, { codiStatus, codiStatusUpdatedAt: ts, updatedAt: ts });
+      if (codiStatus === 'ACTIVE' && ACTIVE.has(c.status)) {
+        await this.notifier.bankAccountActive(this.byId(c.id), this.summary(c.id));
+      }
+    }
+    return matches;
+  }
+
+  // Entry point for a verified Pey webhook. Deduplicates on the webhook id: a replay is a
+  // no-op. `known` says whether the event matched something of ours.
+  async handlePeyEvent(event) {
+    if (this.store.get('webhookEvents', event.id)) return { known: false, duplicate: true };
+    let known = false;
+    if (event.type === 'payment') known = Boolean(this.applyPaymentEvent(event));
+    else if (event.type === 'bank_account') known = (await this.applyBankAccountStatus(event.bankAccountId, event.codiStatus)).length > 0;
+    this.store.insert('webhookEvents', { id: event.id, event: event.event, receivedAt: this.now() });
+    return { known, duplicate: false };
+  }
+
+  // Periodic Pey upkeep; idempotent. With `poll` it asks Pey about accounts that are not
+  // active yet and about pending transactions (and registers the CLABE of colectas created
+  // before bank accounts existed). Always: a charge still pending after its expiration is
+  // marked expired here, because Pey sends no failed/expired events.
+  async sweepPey(now = this.clock(), { poll = true } = {}) {
+    const nowMs = now.getTime();
+    const results = { activated: [], paid: [], expired: [] };
+    if (poll) {
+      for (const c of this.store.find('colectas', (c) => ACTIVE.has(c.status) && c.codiStatus !== 'ACTIVE' && c.codiStatus !== 'ERROR')) {
+        try {
+          let next;
+          if (c.bankAccountId) {
+            next = (await this.pey.getBankAccount(c.bankAccountId)).codiStatus;
+          } else {
+            const account = await this.registerBankAccount({ code: c.code, organizerName: c.organizerName, clabe: c.clabe });
+            if (!account) continue;
+            this.store.update('colectas', c.id, { bankAccountId: account.id, updatedAt: now.toISOString() });
+            next = account.codiStatus;
+            await this.applyBankAccountStatus(account.id, next);
+            if (this.byId(c.id).codiStatus === 'ACTIVE') results.activated.push(c.id);
+            continue;
+          }
+          await this.applyBankAccountStatus(c.bankAccountId, next);
+          if (this.byId(c.id).codiStatus === 'ACTIVE') results.activated.push(c.id);
+        } catch (err) {
+          log.warn('pey.bank_account.poll_failed', { colectaId: c.id, error: err?.message });
+        }
+      }
+    }
+    for (const ch of this.store.find('charges', (ch) => ch.status === 'pending')) {
+      try {
+        if (poll && ch.peyTransactionId) {
+          const tx = await this.pey.getTransaction(ch.peyTransactionId);
+          if (tx.status === 'PAID') {
+            this.store.update('charges', ch.id, { status: 'paid', updatedAt: now.toISOString() });
+            results.paid.push(ch.id);
+            continue;
+          }
+        }
+        if (ch.expiresAt && new Date(ch.expiresAt).getTime() <= nowMs) {
+          this.store.update('charges', ch.id, { status: 'expired', updatedAt: now.toISOString() });
+          results.expired.push(ch.id);
+        }
+      } catch (err) {
+        log.warn('pey.transaction.poll_failed', { chargeId: ch.id, error: err?.message });
+      }
+    }
+    const cutoff = nowMs - 30 * 864e5;
+    for (const e of this.store.find('webhookEvents', (e) => new Date(e.receivedAt).getTime() < cutoff)) {
+      this.store.remove('webhookEvents', e.id);
+    }
+    return results;
   }
 
   // ---------- deadline ----------

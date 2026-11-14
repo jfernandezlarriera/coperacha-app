@@ -27,6 +27,14 @@ export class OutboundQueue {
     return this.pending.length;
   }
 
+  // Cancel a scheduled drain. Tests call this so the process can exit.
+  stop() {
+    if (this.timer) {
+      this.clock.clearTimeout(this.timer);
+      this.timer = null;
+    }
+  }
+
   windowStart() {
     return this.clock.now() - 60_000;
   }

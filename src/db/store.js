@@ -6,7 +6,7 @@ import path from 'node:path';
 
 export const SCHEMA_VERSION = 1;
 
-export const COLLECTIONS = ['organizers', 'colectas', 'participants', 'proposals', 'votes', 'charges'];
+export const COLLECTIONS = ['organizers', 'colectas', 'participants', 'proposals', 'votes', 'charges', 'webhookEvents'];
 
 export class Store {
   // `remote` (optional, see s3-mirror.js) receives a copy of the data after each persist.

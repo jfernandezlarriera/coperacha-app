@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeSystem, makeColecta, join, events, CLABE } from './helpers.js';
+import { makeSystem, makeColecta, join, events, CLABE, OTHER_CLABE } from './helpers.js';
+import { messages } from '../src/domain/messages.js';
 import { DomainError } from '../src/domain/errors.js';
 
 test('create validates CLABE, phone and future deadline; registers organizer with Arturito', async () => {
@@ -16,6 +17,81 @@ test('create validates CLABE, phone and future deadline; registers organizer wit
     phone: '525512345678', role: 'organizer', colectaId: c.id,
     chatIds: ['5215512345678@s.whatsapp.net', '525512345678@s.whatsapp.net'],
   });
+});
+
+test('create registers the organizer CLABE with Pey: preauthorized is ACTIVE, any other is PENDING, a Pey failure creates nothing', async () => {
+  const sys = makeSystem();
+  const c = await makeColecta(sys);
+  assert.equal(c.codiStatus, 'ACTIVE');
+  const account = sys.pey.bankAccounts.get(c.bankAccountId);
+  assert.deepEqual([account.clabe, account.entity, account.name], [CLABE, 'PERSON', 'Ana']);
+  const pending = await makeColecta(sys, { clabe: OTHER_CLABE });
+  assert.equal(pending.codiStatus, 'PENDING');
+  assert.notEqual(pending.bankAccountId, c.bankAccountId);
+  sys.pey.failNextBankAccount = true;
+  await assert.rejects(makeColecta(sys), /Pey/);
+  assert.equal(sys.store.all('colectas').length, 2, 'no half-created colecta');
+});
+
+test('confirm is rejected until the account is ACTIVE; after activation charges go by bankAccountId and 10-digit phone', async () => {
+  const sys = makeSystem();
+  const c = await makeColecta(sys, { goalCents: 20000, clabe: OTHER_CLABE });
+  const p = await join(sys, c, { phone: '5544443333', mode: 'fixed', fixedCents: 20000 });
+  sys.service.propose(sys.service.byId(c.id), `p:${p.id}`, 'Bocina');
+  assert.equal(sys.service.byId(c.id).status, 'goal_reached', 'joining, voting and progress work while PENDING');
+  await assert.rejects(sys.service.confirm(sys.service.byId(c.id), sys.organizer), /active tu cuenta/);
+  assert.equal(sys.service.byId(c.id).status, 'goal_reached');
+  assert.deepEqual((await sys.service.sweepPey()).activated, [], 'Pey still says PENDING');
+  sys.pey.setBankAccountStatus(c.bankAccountId, 'ACTIVE');
+  assert.deepEqual((await sys.service.sweepPey(undefined, { poll: false })).activated, [], 'no polling without poll');
+  assert.deepEqual((await sys.service.sweepPey()).activated, [c.id]);
+  await sys.service.sweepPey();
+  assert.equal(events(sys, 'bankAccountActive').length, 1, 'organizer notified once');
+  const { charges } = await sys.service.confirm(sys.service.byId(c.id), sys.organizer);
+  const [sent] = sys.pey.charges;
+  assert.deepEqual(
+    [sent.kind, sent.bankAccountId, sent.phoneNumber, sent.amount, sent.expiration],
+    ['pn', c.bankAccountId, '5544443333', 200, 86400],
+  );
+  assert.match(String(sent.numRef), /^\d{1,7}$/);
+  assert.deepEqual(sent.metadata, { reference: charges[0].reference, colecta: c.code, participant: p.id });
+  assert.ok(!JSON.stringify(sys.pey.charges).includes(OTHER_CLABE), 'a raw CLABE never goes on a charge');
+  assert.equal(charges[0].peyTransactionId, sent.transactionId);
+});
+
+test('a charge still pending after its expiration times out app-side; a paid one is picked up by polling', async () => {
+  const sys = makeSystem();
+  const c = await makeColecta(sys, { goalCents: 10000 });
+  await join(sys, c, { mode: 'fixed', fixedCents: 5000 });
+  await join(sys, c, { mode: 'fixed', fixedCents: 5000 });
+  const { charges } = await sys.service.confirm(sys.service.byId(c.id), sys.organizer);
+  sys.clock.advanceHours(23);
+  assert.deepEqual(await sys.service.sweepPey(), { activated: [], paid: [], expired: [] });
+  sys.pey.markPaid(charges[0].peyTransactionId);
+  sys.clock.advanceHours(2);
+  assert.deepEqual(await sys.service.sweepPey(), { activated: [], paid: [charges[0].id], expired: [charges[1].id] });
+  assert.deepEqual(sys.service.charges(c.id).map((ch) => ch.status), ['paid', 'expired']);
+  assert.deepEqual(await sys.service.sweepPey(), { activated: [], paid: [], expired: [] }, 'idempotent');
+});
+
+test('QR is the fallback when the CoDi push fails; if both fail the charge is recorded as failed', async () => {
+  const sys = makeSystem();
+  const c = await makeColecta(sys, { goalCents: 10000 });
+  const a = await join(sys, c, { mode: 'fixed', fixedCents: 5000 });
+  await join(sys, c, { mode: 'fixed', fixedCents: 5000 });
+  sys.pey.failNextPush = true;
+  const { charges, summary } = await sys.service.confirm(sys.service.byId(c.id), sys.organizer);
+  assert.deepEqual(charges.map((ch) => ch.method), ['qr', 'pn']);
+  assert.ok(charges[0].qrString);
+  assert.equal(charges[1].qrString, null);
+  assert.ok(messages.charge(summary.colecta, a, charges[0]).includes(charges[0].qrString));
+  const c2 = await makeColecta(sys, { goalCents: 5000 });
+  await join(sys, c2, { mode: 'fixed', fixedCents: 5000 });
+  sys.pey.failNextPush = true;
+  sys.pey.failNextQr = true;
+  const second = await sys.service.confirm(sys.service.byId(c2.id), sys.organizer);
+  assert.equal(second.charges[0].status, 'failed');
+  assert.equal(events(sys, 'charge').length, 2, 'no payment message for a charge that was not created');
 });
 
 test('all-or-nothing: no charge until goal reached and organizer confirms', async () => {
@@ -34,12 +110,12 @@ test('all-or-nothing: no charge until goal reached and organizer confirms', asyn
   const { charges } = await sys.service.confirm(sys.service.byId(c.id), sys.organizer);
   assert.equal(charges.length, 3);
   assert.equal(sys.pey.charges.length, 3);
-  assert.ok(sys.pey.charges.every((ch) => ch.beneficiaryClabe === CLABE && ch.amountCents === 20000));
+  assert.ok(sys.pey.charges.every((ch) => ch.bankAccountId === c.bankAccountId && ch.amount === 200 && !('beneficiaryClabe' in ch)));
   assert.equal(events(sys, 'charge').length, 3);
   assert.equal(sys.service.byId(c.id).status, 'confirmed');
-  const paid = sys.service.applyPaymentEvent({ chargeId: charges[0].peyChargeId, status: 'paid' });
+  const paid = sys.service.applyPaymentEvent({ transactionId: charges[0].peyTransactionId });
   assert.equal(paid.status, 'paid');
-  assert.equal(sys.service.applyPaymentEvent({ chargeId: 'nope', status: 'paid' }), null);
+  assert.equal(sys.service.applyPaymentEvent({ transactionId: 'nope' }), null);
 });
 
 test('contributor list is hidden until confirmed; organizer sees counts, not amounts per name', async () => {

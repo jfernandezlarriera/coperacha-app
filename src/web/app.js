@@ -271,7 +271,9 @@ export function buildApp({ config, store, service, inbound, pey, googleAuth, que
     }
     ctx.json(200, { ok: true, handled: events.length, replies });
   });
-  router.post('/webhooks/pey', (ctx) => {
+  // Standard Webhooks: verified over the raw body, deduplicated on webhook-id. Unknown ids
+  // and replays answer 200 so Pey does not retry them.
+  router.post('/webhooks/pey', async (ctx) => {
     let event;
     try {
       event = pey.parseWebhook({ headers: ctx.req.headers, rawBody: ctx.rawBody });
@@ -279,9 +281,9 @@ export function buildApp({ config, store, service, inbound, pey, googleAuth, que
       if (err instanceof PeyWebhookError) { log.warn('webhook.pey.rejected', { reason: err.message }); return ctx.json(401, { error: 'unauthorized' }); }
       throw err;
     }
-    const charge = service.applyPaymentEvent(event);
-    log.info('webhook.pey', { chargeId: event.chargeId, status: event.status, known: Boolean(charge) });
-    ctx.json(200, { ok: true, known: Boolean(charge) });
+    const result = await service.handlePeyEvent(event);
+    log.info('webhook.pey', { webhookId: event.id, event: event.event, transactionId: event.transactionId, bankAccountId: event.bankAccountId, ...result });
+    ctx.json(200, { ok: true, ...result });
   });
 
   const server = createServer(router, {

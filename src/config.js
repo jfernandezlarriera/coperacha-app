@@ -50,7 +50,7 @@ export function buildConfig(env = process.env) {
     },
     pey: {
       mode: env.PEY_MODE || 'mock',
-      apiUrl: env.PEY_API_URL || '',
+      apiUrl: (env.PEY_API_URL || 'https://api.pey.mx').replace(/\/+$/, ''),
       apiKey: env.PEY_API_KEY || '',
       webhookSecret: env.PEY_WEBHOOK_SECRET || '',
     },
@@ -65,8 +65,9 @@ export function validateConfig(config) {
   if (!config.authDevLogin && !config.google.clientId) {
     problems.push('GOOGLE_CLIENT_ID is required unless AUTH_DEV_LOGIN=true');
   }
-  if (config.pey.mode === 'http' && !config.pey.apiUrl) {
-    problems.push('PEY_API_URL is required when PEY_MODE=http');
+  if (config.pey.mode === 'http') {
+    if (!config.pey.apiKey) problems.push('PEY_API_KEY is required when PEY_MODE=http');
+    if (!config.pey.webhookSecret) problems.push('PEY_WEBHOOK_SECRET is required when PEY_MODE=http');
   }
   return problems;
 }

@@ -45,7 +45,15 @@ export const messages = {
 
   goalReachedOrganizer: (colecta, summary, link) =>
     `¡Se llegó a la meta de ${formatMXN(colecta.goalCents)} con ${summary.participantCount} personas! ` +
-    `Entra a ${link} para confirmar y mandar los cobros CoDi.`,
+    (colecta.codiStatus === 'ACTIVE'
+      ? `Entra a ${link} para confirmar y mandar los cobros CoDi.`
+      : `Los cobros CoDi salen cuando Pey active tu cuenta; te aviso en cuanto quede lista. Puedes ver cómo va en ${link}`),
+
+  bankAccountActive: (colecta, summary, link) =>
+    `¡Listo! Pey ya activó tu cuenta para la coperacha de ${giftLabel(colecta)}. ` +
+    (summary.reached
+      ? `Ya se llegó a la meta: entra a ${link} para confirmar y mandar los cobros CoDi.`
+      : `Cuando se llegue a la meta vas a poder confirmar y mandar los cobros CoDi desde ${link}`),
 
   deadlineReminder: (colecta, summary) =>
     `Mañana vence la coperacha para ${giftLabel(colecta)}. ` +
@@ -54,8 +62,9 @@ export const messages = {
 
   charge: (colecta, participant, charge) =>
     `¡Se armó la coperacha para ${giftLabel(colecta)}! Te toca ${formatMXN(charge.amountCents)}.\n` +
-    `Te llega un cobro CoDi por ese monto; el pago va directo a la cuenta de ${colecta.organizerName}.` +
-    (charge.paymentUrl ? `\nPagar: ${charge.paymentUrl}` : ''),
+    (charge.qrString
+      ? `Paga con CoDi desde la app de tu banco con este código; el pago va directo a la cuenta de ${colecta.organizerName}. Tienes 24 horas.\n${charge.qrString}`
+      : `Te llega un cobro CoDi por ese monto en la app de tu banco; el pago va directo a la cuenta de ${colecta.organizerName}. Tienes 24 horas para aceptarlo.`),
 
   deadlineMissed: (colecta, summary, link) =>
     `Venció la fecha límite y la coperacha para ${giftLabel(colecta)} quedó en ${formatMXN(summary.totalCents)} de ${formatMXN(colecta.goalCents)}. ` +

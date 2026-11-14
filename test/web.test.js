@@ -5,19 +5,20 @@ import { buildSystem } from '../src/server.js';
 import { Store } from '../src/db/store.js';
 import { MockArturitoClient } from '../src/integrations/arturito.js';
 import { MockPeyClient } from '../src/integrations/pey.js';
-import { CLABE, fixedClock } from './helpers.js';
+import { CLABE, OTHER_CLABE, fixedClock } from './helpers.js';
 import { utcToZonedInput } from '../src/util/time.js';
 
+const PEY_SECRET = `whsec_${Buffer.from('web-test-secret').toString('base64')}`;
 const config = buildConfig({
   SESSION_SECRET: 'test-secret-test-secret', AUTH_DEV_LOGIN: 'true', APP_BASE_URL: 'https://coperacha.app',
-  ARTURITO_PHONE: '5215500000000', ARTURITO_WEBHOOK_TOKEN: 'hook-token', PEY_WEBHOOK_SECRET: 'pey-secret', DATABASE_PATH: ':memory:',
+  ARTURITO_PHONE: '5215500000000', ARTURITO_WEBHOOK_TOKEN: 'hook-token', PEY_WEBHOOK_SECRET: PEY_SECRET, DATABASE_PATH: ':memory:',
 });
 const clock = fixedClock();
 const arturito = new MockArturitoClient();
-const pey = new MockPeyClient({ webhookSecret: 'pey-secret' });
+const pey = new MockPeyClient({ webhookSecret: PEY_SECRET });
 const sys = buildSystem(config, { store: new Store(':memory:'), arturito, pey, clock });
 const base = await new Promise((resolve) => sys.server.listen(0, () => resolve(`http://127.0.0.1:${sys.server.address().port}`)));
-after(() => sys.server.close());
+after(() => { sys.queue.stop(); sys.server.close(); });
 
 // Minimal cookie-jar client (one jar per persona).
 function client() {
@@ -106,14 +107,23 @@ test('full walkthrough over HTTP: sign in, create, join, vote, confirm, see cont
   r = await mar(`/c/${colecta.code}`);
   assert.match(r.text, /Luis<\/td><td>\$300\.00/, 'contributors visible to participants after confirmation');
 
-  // Pey webhook: wrong auth rejected, good signature updates the charge.
+  // Pey webhook (Standard Webhooks): unsigned and badly signed are 401, a good signature
+  // marks the charge paid, a replay of the same webhook-id and an unknown id are 200 no-ops.
   const charge = sys.service.charges(colectaId)[0];
-  r = await org('/webhooks/pey', { method: 'POST', json: { chargeId: charge.peyChargeId, status: 'paid' } });
+  const signed = pey.paymentWebhook(charge.peyTransactionId);
+  r = await org('/webhooks/pey', { method: 'POST', json: signed.rawBody });
   assert.equal(r.status, 401);
-  const signed = pey.webhookRequest(charge.peyChargeId, 'paid');
+  r = await org('/webhooks/pey', { method: 'POST', json: signed.rawBody, headers: { ...signed.headers, 'webhook-signature': 'v1,AAAA' } });
+  assert.equal(r.status, 401);
+  assert.equal(sys.service.charges(colectaId)[0].status, 'pending');
   r = await org('/webhooks/pey', { method: 'POST', json: signed.rawBody, headers: signed.headers });
   assert.equal(r.status, 200);
   assert.equal(sys.service.charges(colectaId)[0].status, 'paid');
+  r = await org('/webhooks/pey', { method: 'POST', json: signed.rawBody, headers: signed.headers });
+  assert.deepEqual([r.status, JSON.parse(r.text).duplicate], [200, true]);
+  const unknown = pey.webhookRequest('codi.pn.payment_received', { transactionId: 'nope', amount: 1, metadata: { externalMetadata: {} } });
+  r = await org('/webhooks/pey', { method: 'POST', json: unknown.rawBody, headers: unknown.headers });
+  assert.deepEqual([r.status, JSON.parse(r.text).known], [200, false]);
 
   // Notifications were queued, throttled, and sent through the mock client only.
   await sys.queue.settle();
@@ -122,6 +132,38 @@ test('full walkthrough over HTTP: sign in, create, join, vote, confirm, see cont
 
   r = await org('/auth/logout', { method: 'POST' });
   assert.equal((await org('/dashboard')).status, 303);
+});
+
+test('a CLABE that is not preauthorized: 5-business-day copy, no confirm button until the bank.account.updated webhook', async () => {
+  const org = client();
+  await org('/auth/dev', { method: 'POST', form: { name: 'Cata', email: 'cata@example.com' } });
+  let r = await org('/colectas/new');
+  assert.match(r.text, /hasta 5 días hábiles/);
+  assert.match(r.text, /Coperacha nunca guarda dinero/);
+  r = await org('/colectas', { method: 'POST', form: { giftIdea: 'Libro', goal: '100', deadline: deadlineInput, splitMode: 'free', organizerName: 'Cata', organizerPhone: '5598765432', clabe: OTHER_CLABE } });
+  const colectaId = r.location.split('/')[2].split('?')[0];
+  const colecta = sys.service.byId(colectaId);
+  assert.equal(colecta.codiStatus, 'PENDING');
+  r = await org(`/colectas/${colectaId}`);
+  assert.match(r.text, /Cuenta para cobros: En activación/);
+  assert.match(r.text, /hasta 5 días hábiles/);
+  await client()(`/c/${colecta.code}/join`, { method: 'POST', form: { name: 'Nico', phone: '5577778888', mode: 'fixed', fixed: '100' } });
+  assert.equal(sys.service.byId(colectaId).status, 'goal_reached');
+  r = await org(`/colectas/${colectaId}`);
+  assert.match(r.text, /esperan a que Pey active tu cuenta/);
+  assert.doesNotMatch(r.text, /Confirmar y mandar cobros/);
+  r = await org(`/colectas/${colectaId}/confirm`, { method: 'POST' });
+  assert.equal(r.status, 400);
+  assert.equal(sys.service.charges(colectaId).length, 0);
+  const activation = pey.bankAccountWebhook(colecta.bankAccountId, 'ACTIVE');
+  r = await org('/webhooks/pey', { method: 'POST', json: activation.rawBody, headers: activation.headers });
+  assert.equal(r.status, 200);
+  r = await org(`/colectas/${colectaId}`);
+  assert.match(r.text, /Cuenta para cobros: Activa/);
+  assert.match(r.text, /Confirmar y mandar cobros/);
+  const failing = pey.bankAccountWebhook(colecta.bankAccountId, 'ERROR');
+  await org('/webhooks/pey', { method: 'POST', json: failing.rawBody, headers: failing.headers });
+  assert.match((await org(`/colectas/${colectaId}`)).text, /Cuenta para cobros: Error/);
 });
 
 test('GET /health answers 200 JSON without a session', async () => {

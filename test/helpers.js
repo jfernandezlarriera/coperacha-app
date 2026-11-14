@@ -6,7 +6,10 @@ import { MockArturitoClient } from '../src/integrations/arturito.js';
 import { MockPeyClient } from '../src/integrations/pey.js';
 import { makeClabe } from '../src/util/clabe.js';
 
-export const CLABE = makeClabe('01218000123456789');
+// CLABE is one Pey already authorized (the mock activates it at once); OTHER_CLABE is any
+// other valid CLABE, which stays PENDING until Pey activates it.
+export const CLABE = '012180015826225713';
+export const OTHER_CLABE = makeClabe('01218000123456789');
 
 export function fixedClock(iso = '2026-11-14T12:00:00Z') {
   let now = new Date(iso);

@@ -2,10 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { OutboundQueue } from '../src/integrations/outbound-queue.js';
 import { MockArturitoClient, HttpArturitoClient, registryUrl } from '../src/integrations/arturito.js';
-import { buildConfig } from '../src/config.js';
-import { MockPeyClient, PeyWebhookError } from '../src/integrations/pey.js';
+import { Webhook } from 'standardwebhooks';
+import { buildConfig, validateConfig } from '../src/config.js';
+import { MockPeyClient, HttpPeyClient, PeyWebhookError, PeyApiError, PREAUTHORIZED_CLABES } from '../src/integrations/pey.js';
 import { InboundHandler, parseCommand } from '../src/whatsapp/inbound.js';
-import { makeSystem, makeColecta, join } from './helpers.js';
+import { makeSystem, makeColecta, join, events, OTHER_CLABE } from './helpers.js';
 
 function fakeClock(start = 0) {
   let now = start;
@@ -65,16 +66,89 @@ test('outbound queue retries on 503 and drops on 403', async () => {
   assert.equal(q.sent.length, 1);
 });
 
-test('pey mock: webhook needs a valid signature or bearer and normalizes status', async () => {
-  const pey = new MockPeyClient({ webhookSecret: 's3cret' });
-  const created = await pey.createCharge({ reference: 'CP-1', amountCents: 1000, beneficiaryClabe: '0' });
-  const req = pey.webhookRequest(created.chargeId, 'PAID', 'CP-1');
-  assert.deepEqual(pey.parseWebhook(req), { chargeId: created.chargeId, status: 'paid', reference: 'CP-1' });
-  assert.throws(() => pey.parseWebhook({ headers: { 'x-pey-signature': 'bad' }, rawBody: req.rawBody }), PeyWebhookError);
-  assert.throws(() => pey.parseWebhook({ headers: {}, rawBody: req.rawBody }), PeyWebhookError);
-  const bearer = pey.parseWebhook({ headers: { authorization: 'Bearer s3cret' }, rawBody: JSON.stringify({ id: 'x', status: 'failed' }) });
-  assert.equal(bearer.status, 'failed');
-  assert.throws(() => pey.parseWebhook({ headers: { authorization: 'Bearer s3cret' }, rawBody: 'nope' }), /json/);
+test('pey mock: bank accounts, charges by bankAccountId and Standard Webhooks signatures', async () => {
+  const pey = new MockPeyClient();
+  for (const clabe of PREAUTHORIZED_CLABES) {
+    assert.equal((await pey.createBankAccount({ alias: 'a', name: 'Ana', clabe, entity: 'PERSON' })).codiStatus, 'ACTIVE');
+  }
+  const pending = await pey.createBankAccount({ alias: 'b', name: 'Beto', clabe: OTHER_CLABE, entity: 'PERSON' });
+  assert.equal(pending.codiStatus, 'PENDING');
+  const input = { amountCents: 12345, phone: '5215511112222', concept: 'x', numRef: 1234567, metadata: { reference: 'CP-1' } };
+  await assert.rejects(pey.createPushCharge({ ...input, bankAccountId: pending.id }), PeyApiError, 'no charges into an inactive account');
+  const tx = await pey.createPushCharge({ ...input, bankAccountId: 'mock_ba_1' });
+  assert.deepEqual([pey.charges[0].amount, pey.charges[0].phoneNumber, pey.charges[0].bankAccountId], [123.45, '5511112222', 'mock_ba_1']);
+
+  const req = pey.paymentWebhook(tx.transactionId);
+  assert.equal(new Webhook(pey.webhookSecret).verify(req.rawBody, req.headers).type, 'codi.pn.payment_received');
+  assert.deepEqual(pey.parseWebhook(req), {
+    id: req.headers['webhook-id'], type: 'payment', event: 'codi.pn.payment_received',
+    transactionId: tx.transactionId, amount: 123.45, metadata: { reference: 'CP-1' },
+  });
+  assert.throws(() => pey.parseWebhook({ headers: { ...req.headers, 'webhook-signature': 'v1,AAAA' }, rawBody: req.rawBody }), PeyWebhookError);
+  assert.throws(() => pey.parseWebhook({ headers: req.headers, rawBody: req.rawBody.replace('123.45', '999') }), PeyWebhookError, 'raw body is what is signed');
+  assert.throws(() => pey.parseWebhook({ headers: { 'x-pey-signature': 'x', authorization: `Bearer ${pey.webhookSecret}` }, rawBody: req.rawBody }), PeyWebhookError);
+  const bank = pey.parseWebhook(pey.bankAccountWebhook(pending.id, 'ACTIVE'));
+  assert.deepEqual([bank.type, bank.bankAccountId, bank.codiStatus], ['bank_account', pending.id, 'ACTIVE']);
+});
+
+test('pey webhooks: bank.account.updated activates and notifies, payment_received marks paid, replays and unknown ids are no-ops', async () => {
+  const sys = makeSystem();
+  const c = await makeColecta(sys, { goalCents: 10000, clabe: OTHER_CLABE });
+  await join(sys, c, { mode: 'fixed', fixedCents: 10000 });
+  const handle = (req) => sys.service.handlePeyEvent(sys.pey.parseWebhook(req));
+  const activation = sys.pey.bankAccountWebhook(c.bankAccountId, 'ACTIVE');
+  assert.deepEqual(await handle(activation), { known: true, duplicate: false });
+  assert.equal(sys.service.byId(c.id).codiStatus, 'ACTIVE');
+  assert.deepEqual(await handle(activation), { known: false, duplicate: true });
+  assert.equal(events(sys, 'bankAccountActive').length, 1);
+  const { charges } = await sys.service.confirm(sys.service.byId(c.id), sys.organizer);
+  const payment = sys.pey.paymentWebhook(charges[0].peyTransactionId);
+  assert.deepEqual(await handle(payment), { known: true, duplicate: false });
+  assert.equal(sys.service.charges(c.id)[0].status, 'paid');
+  assert.deepEqual(await handle(payment), { known: false, duplicate: true });
+  const unknown = sys.pey.webhookRequest('codi.qr.payment_received', { transactionId: 'nope', amount: 1, metadata: { externalMetadata: {} } });
+  assert.deepEqual(await handle(unknown), { known: false, duplicate: false });
+  await handle(sys.pey.bankAccountWebhook(c.bankAccountId, 'ERROR'));
+  assert.equal(sys.service.byId(c.id).codiStatus, 'ERROR');
+});
+
+test('pey http client: api.pey.mx, Bearer key, documented bodies; never the network', async () => {
+  const replies = [
+    { body: { id: 'ba_1', codiStatus: 'PENDING' } }, { body: { id: 'ba_1', codiStatus: 'ACTIVE' } },
+    { body: { transactionId: 'tx_1', codiId: 'codi_1' } }, { body: { transactionId: 'tx_2', qrString: 'QR' } },
+    { body: { id: 'tx_1', status: 'PAID' } }, { status: 500, body: {} },
+  ];
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, method: init.method, auth: init.headers.authorization, body: init.body ? JSON.parse(init.body) : undefined });
+    const { status = 200, body } = replies.shift();
+    return { ok: status < 400, status, json: async () => body };
+  };
+  const client = new HttpPeyClient({ apiKey: 'key-123', webhookSecret: 'whsec_dGVzdA==', fetchImpl });
+  assert.deepEqual(await client.createBankAccount({ alias: 'Coperacha X', name: 'Ana', clabe: OTHER_CLABE }), { id: 'ba_1', codiStatus: 'PENDING' });
+  assert.deepEqual(await client.getBankAccount('ba_1'), { id: 'ba_1', codiStatus: 'ACTIVE' });
+  const charge = { amountCents: 199999, concept: 'Coperacha Bocina', numRef: 7654321, bankAccountId: 'ba_1', metadata: { reference: 'CP-1', colecta: 'abc', participant: 'p1' } };
+  assert.deepEqual(await client.createPushCharge({ ...charge, phone: '525511112222' }), { transactionId: 'tx_1', codiId: 'codi_1' });
+  assert.equal((await client.createQrCharge({ ...charge, amountCents: 7 })).qrString, 'QR');
+  assert.deepEqual(await client.getTransaction('tx_1'), { transactionId: 'tx_1', status: 'PAID' });
+  await assert.rejects(client.getTransaction('tx_9'), PeyApiError);
+  assert.deepEqual(calls.map((c) => `${c.method} ${c.url}`), [
+    'POST https://api.pey.mx/bank-account', 'GET https://api.pey.mx/bank-account/ba_1', 'POST https://api.pey.mx/codi/pn',
+    'POST https://api.pey.mx/codi/qr', 'GET https://api.pey.mx/transaction/tx_1', 'GET https://api.pey.mx/transaction/tx_9',
+  ]);
+  assert.ok(calls.every((c) => c.auth === 'Bearer key-123'));
+  assert.deepEqual(calls[0].body, { alias: 'Coperacha X', name: 'Ana', clabe: OTHER_CLABE, entity: 'PERSON' });
+  assert.deepEqual(calls[2].body, {
+    amount: 1999.99, phoneNumber: '5511112222', concept: 'Coperacha Bocina', expiration: 86400, numRef: 7654321,
+    bankAccountId: 'ba_1', metadata: { reference: 'CP-1', colecta: 'abc', participant: 'p1' },
+  });
+  assert.equal(calls[3].body.amount, 0.07);
+  assert.ok(!('phoneNumber' in calls[3].body) && !JSON.stringify(calls.slice(2)).includes(OTHER_CLABE));
+
+  const base = { SESSION_SECRET: 'x'.repeat(20), AUTH_DEV_LOGIN: 'true', PEY_MODE: 'http' };
+  assert.equal(buildConfig(base).pey.apiUrl, 'https://api.pey.mx');
+  assert.deepEqual(validateConfig(buildConfig(base)), ['PEY_API_KEY is required when PEY_MODE=http', 'PEY_WEBHOOK_SECRET is required when PEY_MODE=http']);
+  assert.deepEqual(validateConfig(buildConfig({ ...base, PEY_API_KEY: 'k', PEY_WEBHOOK_SECRET: 's' })), []);
 });
 
 test('inbound commands parse with and without accents', () => {
