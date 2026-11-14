@@ -18,7 +18,7 @@ Repo público. Nunca subir secretos, claves ni datos de usuarios. La landing viv
 
 ```bash
 cp .env.example .env        # llenar SESSION_SECRET; con AUTH_DEV_LOGIN=true no hace falta Google
-npm test                    # 33 tests, sin red
+npm test                    # 36 tests, sin red
 npm start                   # http://localhost:3000
 ```
 
@@ -86,11 +86,6 @@ con la ganadora, con una propuesta concreta o con su propia elección.
 - Logs sin texto de mensajes, nombres ni teléfonos: sólo `chatId`, `type`, `messageId` e ids.
 
 ## Variables de entorno
-
-> Nota: la plantilla todavía está en el repo como `env.example` porque las sesiones de agente
-> no pueden escribir rutas `.env*`. Falta un `git mv env.example .env.example` a mano (mientras
-> tanto: `cp env.example .env`); después hay que borrar esta nota y la del encabezado del
-> archivo.
 
 Nombres en `.env.example` (comentados): `PORT`, `APP_BASE_URL`, `SESSION_SECRET`,
 `COOKIE_SECURE`, `DATABASE_PATH`, `APP_TIMEZONE`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
