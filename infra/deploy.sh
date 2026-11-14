@@ -115,9 +115,9 @@ if [ -n "$(git status --porcelain)" ]; then
   TAG="$TAG-dirty"
 fi
 aws ecr get-login-password | docker login --username AWS --password-stdin "$ECR" >/dev/null
-docker build --platform linux/amd64 -q -t "$IMAGE_REPO:$TAG" -t "$IMAGE_REPO:latest" . >/dev/null
-docker push -q "$IMAGE_REPO:$TAG" >/dev/null
-docker push -q "$IMAGE_REPO:latest" >/dev/null
+# buildx is required on Apple Silicon: the classic builder fails mid-COPY with
+# "does not provide the specified platform (linux/amd64)".
+docker buildx build --platform linux/amd64 --push -t "$IMAGE_REPO:$TAG" -t "$IMAGE_REPO:latest" .
 echo "Image: $IMAGE_REPO:$TAG (also latest)"
 
 # ---------- 6. App Runner service
