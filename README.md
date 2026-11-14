@@ -12,13 +12,14 @@ Repo público. Nunca subir secretos, claves ni datos de usuarios. La landing viv
 
 - Node.js 20, JavaScript (ESM), sin dependencias de npm: `node:http`, `node:test`, `fetch`.
 - Persistencia: un archivo JSON (`DATABASE_PATH`) con esquema en `src/db/schema.md`; la
-  interfaz `Store` es el punto para pasar a SQLite.
+  interfaz `Store` es el punto para pasar a SQLite. En producción el mismo JSON se guarda en
+  S3 (ver «Persistencia en S3»).
 
 ## Setup local
 
 ```bash
 cp .env.example .env        # llenar SESSION_SECRET; con AUTH_DEV_LOGIN=true no hace falta Google
-npm test                    # 36 tests, sin red
+npm test                    # 46 tests, sin red
 npm start                   # http://localhost:3000
 ```
 
@@ -48,7 +49,13 @@ src/integrations/        arturito (send/register), outbound-queue (6/min), pey (
 src/whatsapp/inbound.js  comandos entrantes
 src/auth/google.js       OAuth 2.0 + stub local
 src/db/store.js          repositorio JSON
+src/db/open-store.js     elige archivo local o archivo + copia en S3
+src/db/s3-mirror.js      subida a S3 después de cada cambio (en serie, con reintentos)
+src/db/s3-objects.js     cliente S3 mínimo (GET/PUT firmados con SigV4, sin dependencias)
 ```
+
+`GET /health` responde `200 {"ok":true}` (health check de App Runner); `GET /healthz` suma el
+tamaño de la cola de salida.
 
 Estados de una colecta: `open` → `goal_reached` (la suma llega a la meta) → `confirmed` (el
 organizador confirma: se congelan montos y salen los cobros) · `open` → `failed` (venció sin
@@ -88,11 +95,28 @@ con la ganadora, con una propuesta concreta o con su propia elección.
 ## Variables de entorno
 
 Nombres en `.env.example` (comentados): `PORT`, `APP_BASE_URL`, `SESSION_SECRET`,
-`COOKIE_SECURE`, `DATABASE_PATH`, `APP_TIMEZONE`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+`COOKIE_SECURE`, `DATABASE_PATH`, `DATABASE_S3_BUCKET`, `DATABASE_S3_KEY`, `AWS_REGION`,
+`APP_TIMEZONE`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `GOOGLE_REDIRECT_URI`, `AUTH_DEV_LOGIN`, `ARTURITO_PHONE`, `ARTURITO_SEND_URL`,
 `ARTURITO_SEND_KEY`,
 `ARTURITO_WEBHOOK_TOKEN`, `ARTURITO_SEND_LIMIT_PER_MINUTE`, `PEY_MODE`, `PEY_API_URL`,
 `PEY_API_KEY`, `PEY_WEBHOOK_SECRET`.
+
+### Persistencia en S3
+
+Sin `DATABASE_S3_BUCKET` (desarrollo local) el store es sólo el archivo `DATABASE_PATH`. Con
+`DATABASE_S3_BUCKET` y `DATABASE_S3_KEY` (default `coperacha.json`; región en `AWS_REGION`,
+default `us-east-2`):
+
+- Al arrancar se baja el objeto de S3 y esa copia manda sobre el archivo local. Si el objeto
+  todavía no existe se arranca con lo que haya local y se sube. Si la descarga falla por
+  cualquier otro motivo el proceso no arranca, para no pisar datos con un store vacío.
+- Después de cada cambio se sube el JSON completo. Las subidas van de a una, siempre con el
+  estado más reciente, y se reintentan con espera creciente si S3 falla. Al recibir `SIGTERM`
+  el proceso espera hasta 8 s a que termine la subida pendiente.
+- Un solo escritor: una sola instancia por bucket/objeto.
+- Credenciales: `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (/ `AWS_SESSION_TOKEN`) del
+  entorno o, en App Runner, el rol de la instancia. No lee `~/.aws` ni `AWS_PROFILE`.
 
 ## WhatsApp (Arturito)
 
@@ -144,16 +168,19 @@ firmados. `PEY_MODE=http` usa `HttpPeyClient` contra `PEY_API_URL/charges`; el f
 cuerpo y de los estados (`paid`, `failed`, `expired`, `pending`) es una suposición a ajustar
 contra el sandbox real. Los tests nunca tocan la red.
 
-## Hosting propuesto (no desplegado)
+## Hosting
 
-Cuenta AWS 355622872251, región us-east-2, perfil `coperacha`, prefijo `coperacha-`:
+Un contenedor chico en AWS App Runner (cuenta 355622872251, región us-east-2, perfil
+`coperacha`) en `https://app.coperacha.app`: imagen del `Dockerfile` (Node 20, linux/amd64,
+usuario sin privilegios, sin secretos), una instancia de 0.25 vCPU, store en S3 y secretos en
+Secrets Manager (`coperacha-app/prod`).
 
-- Opción preferida: un contenedor chico (App Runner o ECS Fargate, 0.25 vCPU) detrás de
-  HTTPS en `app.coperacha.app`, con el archivo de datos en un volumen EFS o, mejor, migrando a
-  SQLite/RDS antes de salir. Lambda + Function URL también sirve, pero el store en archivo y la
-  cola en memoria piden un proceso persistente.
-- Secretos en Secrets Manager; deploy por GitHub Actions con OIDC (rol
-  `github-coperacha-app-deploy`), sólo con el OK de JI.
+```bash
+AWS_PROFILE=coperacha infra/deploy.sh    # sólo con el OK de JI
+```
+
+Detalle de recursos, secreto y dominio en [infra/README.md](./infra/README.md). La cola de
+salida de WhatsApp sigue en memoria: lo que esté encolado se pierde en cada deploy.
 
 ## Preguntas abiertas
 

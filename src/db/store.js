@@ -9,11 +9,34 @@ export const SCHEMA_VERSION = 1;
 export const COLLECTIONS = ['organizers', 'colectas', 'participants', 'proposals', 'votes', 'charges'];
 
 export class Store {
-  constructor(filePath = ':memory:') {
+  // `remote` (optional, see s3-mirror.js) receives a copy of the data after each persist.
+  constructor(filePath = ':memory:', { remote = null } = {}) {
     this.filePath = filePath;
+    this.remote = remote;
     this.data = { schemaVersion: SCHEMA_VERSION };
     for (const c of COLLECTIONS) this.data[c] = [];
     this.load();
+    this.remote?.attach(() => JSON.stringify(this.data, null, 1));
+  }
+
+  // Boot step when a remote is configured: the remote copy wins over the local file. If the
+  // remote has no object yet, whatever was loaded locally is uploaded as the first copy.
+  // Returns true when data came from the remote.
+  async loadRemote() {
+    if (!this.remote) return false;
+    const raw = await this.remote.load();
+    if (raw === null) {
+      if (COLLECTIONS.some((c) => this.data[c].length)) this.remote.markDirty();
+      return false;
+    }
+    this.data = migrate(JSON.parse(raw));
+    this.writeLocal();
+    return true;
+  }
+
+  // Resolves when pending remote uploads are done (no-op without a remote).
+  async flush() {
+    await this.remote?.flush();
   }
 
   get inMemory() {
@@ -27,6 +50,11 @@ export class Store {
   }
 
   persist() {
+    this.writeLocal();
+    this.remote?.markDirty();
+  }
+
+  writeLocal() {
     if (this.inMemory) return;
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.tmp`;

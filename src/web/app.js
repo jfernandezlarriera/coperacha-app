@@ -96,7 +96,10 @@ export function buildApp({ config, store, service, inbound, pey, googleAuth, que
   };
 
   // ----- public -----
-  router.get('/healthz', (ctx) => ctx.json(200, { ok: true, queue: queue?.size ?? 0 }));
+  // App Runner health check. Deliberately independent of S3 so a storage hiccup does not
+  // restart the instance (and lose what is waiting to be uploaded).
+  router.get('/health', (ctx) => ctx.json(200, { ok: true }));
+  router.get('/healthz',(ctx) => ctx.json(200, { ok: true, queue: queue?.size ?? 0 }));
   router.get('/', (ctx) => ctx.send(200, views.homePage({ organizer: currentOrganizer(ctx), authDev })));
 
   // ----- auth -----

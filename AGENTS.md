@@ -24,6 +24,8 @@ live in `src/domain/`; WhatsApp (Arturito) and CoDi (Pey) are behind interfaces 
 - Who-paid-what is exposed only by `contributorList()` in `src/domain/colecta.js`; keep it
   that way in web, WhatsApp and logs.
 - Logs never contain message text, names or phones: only chatId, type, messageId and ids.
+- In production the store is mirrored to S3 (`DATABASE_S3_BUCKET`, see `src/db/open-store.js`)
+  with a single writer: keep App Runner at one instance. Deploy details in `infra/README.md`.
 - `Store` returns live references: take primitive snapshots before mutating when you need
   before/after comparisons (see `snapshot()` in `colecta.js`).
 - Outbound WhatsApp always goes through `OutboundQueue` (6/min). Never call the Arturito
@@ -42,4 +44,5 @@ live in `src/domain/`; WhatsApp (Arturito) and CoDi (Pey) are behind interfaces 
 Read by `~/Work/workspace/bin/change`. Keep the key format.
 
 - test: `npm test`
+- deploy: `AWS_PROFILE=coperacha infra/deploy.sh`
 - deploy_requires_approval: yes

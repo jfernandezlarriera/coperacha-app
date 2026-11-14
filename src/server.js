@@ -1,6 +1,7 @@
 // Entry point: wires config, store, integrations, services and the HTTP server.
 import { loadDotEnv, buildConfig, validateConfig } from './config.js';
 import { Store } from './db/store.js';
+import { openStore } from './db/open-store.js';
 import { ColectaService } from './domain/colecta.js';
 import { Notifier } from './services/notifier.js';
 import { OutboundQueue } from './integrations/outbound-queue.js';
@@ -44,9 +45,22 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     for (const p of problems) process.stderr.write(`config: ${p}\n`);
     process.exit(1);
   }
-  const system = buildSystem(config);
+  // With DATABASE_S3_BUCKET set this downloads the store first; a failed download stops the
+  // boot instead of starting empty on top of existing data.
+  const store = await openStore(config);
+  const system = buildSystem(config, { store });
   startDeadlineJob(system.service);
   system.server.listen(config.port, () => {
-    log.info('server.listening', { port: config.port, baseUrl: config.baseUrl, pey: config.pey.mode, arturitoSend: Boolean(config.arturito.sendUrl) });
+    log.info('server.listening', { port: config.port, baseUrl: config.baseUrl, pey: config.pey.mode, arturitoSend: Boolean(config.arturito.sendUrl), s3Store: Boolean(config.databaseS3Bucket) });
   });
+  // App Runner sends SIGTERM on every deploy: stop accepting requests and give pending
+  // store uploads a few seconds to finish.
+  const shutdown = async (signal) => {
+    log.info('server.shutdown', { signal });
+    system.server.close();
+    await Promise.race([store.flush(), new Promise((resolve) => { setTimeout(resolve, 8000); })]);
+    process.exit(0);
+  };
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
 }

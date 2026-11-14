@@ -124,6 +124,16 @@ test('full walkthrough over HTTP: sign in, create, join, vote, confirm, see cont
   assert.equal((await org('/dashboard')).status, 303);
 });
 
+test('GET /health answers 200 JSON without a session', async () => {
+  for (const path of ['/health', '/healthz']) {
+    const res = await fetch(`${base}${path}`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type'), /application\/json/);
+    assert.equal((await res.json()).ok, true);
+  }
+  assert.deepEqual(await (await fetch(`${base}/health`)).json(), { ok: true });
+});
+
 test('Arturito webhook requires the bearer token and routes commands', async () => {
   const c = client();
   let r = await c('/webhooks/arturito', { method: 'POST', json: { chatId: '525511112222@s.whatsapp.net', type: 'text', messageId: 'x', text: 'menu' } });

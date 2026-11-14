@@ -1,0 +1,9 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Sid": "ReadAppSecret", "Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "__SECRET_ARN__"},
+    {"Sid": "ReadWriteStoreObject", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"],
+     "Resource": "arn:aws:s3:::__BUCKET__/__KEY__"},
+    {"Sid": "TellMissingObjectFromDenied", "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::__BUCKET__"}
+  ]
+}

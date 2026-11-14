@@ -31,6 +31,9 @@ export function buildConfig(env = process.env) {
     sessionSecret: env.SESSION_SECRET || '',
     cookieSecure: bool(env.COOKIE_SECURE, false),
     databasePath: env.DATABASE_PATH || './data/coperacha.json',
+    databaseS3Bucket: env.DATABASE_S3_BUCKET || '',
+    databaseS3Key: env.DATABASE_S3_KEY || 'coperacha.json',
+    awsRegion: env.AWS_REGION || env.AWS_DEFAULT_REGION || 'us-east-2',
     timezone: env.APP_TIMEZONE || 'America/Mexico_City',
     google: {
       clientId: env.GOOGLE_CLIENT_ID || '',
