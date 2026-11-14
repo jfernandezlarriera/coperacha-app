@@ -108,8 +108,11 @@ export function editColectaPage({ organizer, colecta, err, authDev }) {
 }
 
 function progressBar(summary) {
+  const original = summary.colecta.confirmedBelowGoal && summary.colecta.originalGoalCents
+    ? ` <small>(se confirmó con lo que se juntó; la meta original era ${formatMXN(summary.colecta.originalGoalCents)})</small>`
+    : '';
   return `<div class="progress"><span style="width:${summary.percent}%"></span></div>
-<p><strong>${formatMXN(summary.totalCents)}</strong> de ${formatMXN(summary.colecta.goalCents)} (${summary.percent}%) · ${summary.participantCount} ${summary.participantCount === 1 ? 'persona' : 'personas'}${summary.reached ? '' : ` · faltan ${formatMXN(summary.remainingCents)}`}</p>`;
+<p><strong>${formatMXN(summary.totalCents)}</strong> de ${formatMXN(summary.colecta.goalCents)} (${summary.percent}%) · ${summary.participantCount} ${summary.participantCount === 1 ? 'persona' : 'personas'}${summary.reached ? '' : ` · faltan ${formatMXN(summary.remainingCents)}`}${original}</p>`;
 }
 
 function votingSection({ colecta, board, myVote, action, canClose }) {
@@ -130,7 +133,7 @@ function contributorsSection(contributors) {
   return `<h2>Quién puso cuánto</h2><table><tr><th>Nombre</th><th>Aportación</th></tr>${contributors.map((c) => `<tr><td>${esc(c.name)}</td><td>${formatMXN(c.amountCents)}</td></tr>`).join('')}</table>`;
 }
 
-export function organizerColectaPage({ organizer, summary, stats, board, myVote, link, waLink, charges, contributors, msg, err, authDev }) {
+export function organizerColectaPage({ organizer, summary, stats, board, myVote, link, waLink, charges, contributors, msg, err, authDev, confirmBelow = false }) {
   const { colecta } = summary;
   const id = esc(colecta.id);
   let actions = '';
@@ -141,6 +144,21 @@ export function organizerColectaPage({ organizer, summary, stats, board, myVote,
   } else if (colecta.status === 'goal_reached') {
     actions = `<div class="ok"><strong>¡Se llegó a la meta!</strong> Al confirmar se congelan los montos y cada persona recibe su cobro CoDi.
 <form method="post" action="/colectas/${id}/confirm"><button>Confirmar y mandar cobros</button></form></div>`;
+  } else if (colecta.status === 'open' && summary.participantCount > 0 && summary.totalCents > 0) {
+    if (colecta.codiStatus !== 'ACTIVE') {
+      actions = colecta.codiStatus === 'ERROR'
+        ? `<div class="error"><strong>Todavía no se llega a la meta</strong> (${formatMXN(summary.totalCents)} de ${formatMXN(colecta.goalCents)}), y no se pueden mandar los cobros CoDi porque Pey no pudo activar tu cuenta.</div>`
+        : `<div class="flash">Ya se juntaron ${formatMXN(summary.totalCents)} de ${formatMXN(colecta.goalCents)}. Puedes confirmar con lo que se juntó cuando Pey active tu cuenta (puede tardar hasta 5 días hábiles). En cuanto quede activa te avisamos por WhatsApp y aquí vas a poder confirmar y mandar los cobros.</div>`;
+    } else if (confirmBelow) {
+      actions = `<div class="card"><h3>Confirmar con lo que se juntó</h3>
+<p><strong>Van ${formatMXN(summary.totalCents)} de ${formatMXN(colecta.goalCents)}.</strong> Si confirmas, la meta baja a ${formatMXN(summary.totalCents)} y se mandan los cobros CoDi por lo que cada persona ya había comprometido. Nadie paga de más. Esta acción no se puede deshacer.</p>
+<form method="post" action="/colectas/${id}/confirm"><input type="hidden" name="acceptBelowGoal" value="1"><button>Sí, confirmar con ${formatMXN(summary.totalCents)} y mandar cobros</button></form>
+<p><a href="/colectas/${id}">Volver</a></p></div>`;
+    } else {
+      actions = `<div class="card"><h3>Confirmar con lo que se juntó</h3>
+<p>Todavía no se llega a la meta, pero ya hay ${formatMXN(summary.totalCents)} de ${formatMXN(colecta.goalCents)}. Puedes confirmar con lo que se juntó: cada persona paga exactamente lo que había comprometido, no más.</p>
+<p><a class="btn" href="/colectas/${id}?confirmBelow=1">Confirmar con lo que se juntó</a></p></div>`;
+    }
   } else if (colecta.status === 'failed') {
     actions = `<div class="error"><strong>Venció la fecha límite sin llegar a la meta.</strong> Nadie paga nada. Elige qué hacer:</div>
 <div class="card"><h3>Cambiar el regalo</h3><form method="post" action="/colectas/${id}/outcome"><input type="hidden" name="action" value="change_gift">
@@ -152,7 +170,10 @@ export function organizerColectaPage({ organizer, summary, stats, board, myVote,
 <div class="card"><h3>Cancelar</h3><form method="post" action="/colectas/${id}/outcome"><input type="hidden" name="action" value="cancel"><button class="danger">Cancelar la colecta</button></form></div>`;
   } else if (colecta.status === 'confirmed') {
     const paid = charges.filter((c) => c.status === 'paid').length;
-    actions = `<div class="ok">Cobros enviados: ${paid} de ${charges.length} pagados.</div>
+    const below = colecta.confirmedBelowGoal
+      ? `<p>Se confirmó con lo que se juntó: ${formatMXN(colecta.goalCents)} de ${formatMXN(colecta.originalGoalCents)} de meta original.</p>`
+      : '';
+    actions = `<div class="ok">${below}Cobros enviados: ${paid} de ${charges.length} pagados.</div>
 <table><tr><th>Referencia</th><th>Monto</th><th>Estado</th></tr>${charges.map((c) => `<tr><td><code>${esc(c.reference)}</code></td><td>${formatMXN(c.amountCents)}</td><td>${esc(CHARGE_STATUS_LABEL[c.status] || c.status)}</td></tr>`).join('')}</table>
 <p class="hint">Cada cobro CoDi vence a las 24 horas. Pey no hace devoluciones: si alguien no paga, su cobro solo vence.</p>`;
   }

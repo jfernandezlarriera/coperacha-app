@@ -60,6 +60,11 @@ export const messages = {
     `Van ${formatMXN(summary.totalCents)} de ${formatMXN(colecta.goalCents)}; faltan ${formatMXN(summary.remainingCents)}. ` +
     `Si conoces a alguien que quiera sumarse, compártele el link.`,
 
+  confirmedBelowGoal: (colecta, participant, amountCents) =>
+    `La coperacha para ${giftLabel(colecta)} se confirmó con lo que se juntó: ` +
+    `${formatMXN(colecta.goalCents)} de ${formatMXN(colecta.originalGoalCents)}. ` +
+    `Tu aportación quedó en ${formatMXN(amountCents)}. Te llega el cobro CoDi por ese monto.`,
+
   charge: (colecta, participant, charge) =>
     `¡Se armó la coperacha para ${giftLabel(colecta)}! Te toca ${formatMXN(charge.amountCents)}.\n` +
     (charge.qrString

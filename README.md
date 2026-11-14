@@ -1,9 +1,9 @@
 # coperacha-app
 
 App de [Coperacha](https://coperacha.app): colectas en grupo («coperachas») para un regalo
-sorpresa, todo o nada. Junta compromisos por web y WhatsApp, cobra sólo si se llega a la
-meta y cada cobro CoDi (vía Pey) va directo a la CLABE de quien organiza. Coperacha nunca
-guarda dinero.
+sorpresa, todo o nada. Junta compromisos por web y WhatsApp, cobra si se llega a la meta
+(o si quien organiza confirma con lo que se juntó) y cada cobro CoDi (vía Pey) va directo
+a la CLABE de quien organiza. Coperacha nunca guarda dinero.
 
 Repo público. Nunca subir secretos, claves ni datos de usuarios. La landing vive en
 `coperacha-landing`.
@@ -27,7 +27,8 @@ npm start                   # http://localhost:3000
 
 Recorrido: entrar (`/auth/dev` en local o Google), crear colecta, copiar el link `/c/<code>`,
 abrirlo en otra ventana privada y sumarse, proponer y votar regalo, ver el menú (sin ver
-quién puso cuánto), llegar a la meta, «Confirmar y mandar cobros» y recién ahí ver la lista.
+quién puso cuánto), llegar a la meta y «Confirmar y mandar cobros», o «Confirmar con lo que
+se juntó» si todavía no se cubre la meta, y recién ahí ver la lista.
 
 ### Google OAuth para uso local
 
@@ -60,7 +61,9 @@ src/db/s3-objects.js     cliente S3 mínimo (GET/PUT firmados con SigV4, sin dep
 tamaño de la cola de salida.
 
 Estados de una colecta: `open` → `goal_reached` (la suma llega a la meta) → `confirmed` (el
-organizador confirma: se congelan montos y salen los cobros) · `open` → `failed` (venció sin
+organizador confirma: se congelan montos y salen los cobros) · `open` → `confirmed` (el
+organizador confirma con lo que se juntó: la meta baja al total comprometido, los montos se
+congelan contra la meta original y salen los cobros) · `open` → `failed` (venció sin
 meta) → cambiar regalo / bajar meta (vuelve a `open` o `goal_reached`) / `cancelled`.
 
 ### Reglas de montos
@@ -77,6 +80,8 @@ Todo en centavos. N = personas sumadas (cualquier modalidad).
    los de tope al valor provisional `min(mayoría, X)`. Sólo se muestra el agregado. Límite
    conocido: con muy pocos participantes, el organizador podría inferir X a partir del total.
 6. Al confirmar se congelan los montos (`finalCents`) y recién ahí se muestra quién puso cuánto.
+   Si se confirma con lo que se juntó, esos montos se calculan con la meta original (lo que
+   cada persona ya había comprometido) y nunca suben; la meta queda en el total confirmado.
 
 Modalidad de reparto: `equal` sólo permite parte igual o mayoría con tope; `free` suma monto fijo.
 
@@ -150,7 +155,8 @@ Esta app es cliente del bot Arturito; no modifica ese repo.
   tipos que no son texto: no-op.
 - **Notificaciones**: confirmación al sumarse, hitos 50 % y 75 % (al organizador), meta
   alcanzada (al organizador, con link para confirmar), recordatorio 24 h antes del cierre,
-  cobro CoDi, vencimiento con las tres salidas, reapertura, cancelación y regalo elegido.
+  cobro CoDi, confirmación con lo que se juntó (a cada participante, con su monto), vencimiento
+  con las tres salidas, reapertura, cancelación y regalo elegido.
 - Teléfonos: se guardan como dígitos internacionales (`52` + 10 dígitos; el `521` viejo se
   normaliza al guardar). `ARTURITO_PHONE` en ese mismo formato (sin el `1` extra) para el link
   `wa.me`.

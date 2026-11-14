@@ -47,6 +47,12 @@ export class Notifier {
     this.toOrganizer(colecta, messages.bankAccountActive(colecta, summary, this.organizerLink(colecta)));
   }
 
+  async confirmedBelowGoal(colecta, summary) {
+    for (const p of summary.participants) {
+      this.toParticipant(p, messages.confirmedBelowGoal(colecta, p, p.finalCents));
+    }
+  }
+
   async charge(colecta, participant, charge) {
     this.toParticipant(participant, messages.charge(colecta, participant, charge));
   }
@@ -76,7 +82,7 @@ export class RecordingNotifier {
     this.events = [];
   }
 }
-for (const name of ['joined', 'milestone', 'goalReached', 'deadlineReminder', 'bankAccountActive', 'charge', 'deadlineMissed', 'reopened', 'cancelled', 'giftChosen']) {
+for (const name of ['joined', 'milestone', 'goalReached', 'deadlineReminder', 'bankAccountActive', 'confirmedBelowGoal', 'charge', 'deadlineMissed', 'reopened', 'cancelled', 'giftChosen']) {
   RecordingNotifier.prototype[name] = async function (...args) {
     this.events.push({ type: name, args });
   };

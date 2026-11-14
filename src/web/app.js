@@ -83,6 +83,7 @@ export function buildApp({ config, store, service, inbound, pey, googleAuth, que
       organizer, summary, stats: service.organizerStats(summary), board, myVote,
       link: shareLink(colecta), waLink: whatsappLink(colecta), charges: service.charges(colecta.id),
       contributors: service.contributorList(summary), msg, err, authDev,
+      confirmBelow: ctx.query.confirmBelow === '1',
     }));
   };
   const renderParticipant = (ctx, colecta, participant, { msg, err } = {}) => {
@@ -195,7 +196,10 @@ export function buildApp({ config, store, service, inbound, pey, googleAuth, que
   router.post('/colectas/:id/proposals', organizerAction((ctx, o, c) => { service.propose(c, `o:${o.id}`, ctx.body.title); return 'ok'; }));
   router.post('/colectas/:id/vote', organizerAction((ctx, o, c) => { service.vote(c, `o:${o.id}`, ctx.body.proposalId); return 'ok'; }));
   router.post('/colectas/:id/close-voting', organizerAction(async (ctx, o, c) => { await service.closeVoting(c, o, { proposalId: ctx.body.proposalId || null, ownPick: ctx.body.ownPick || null }); return 'ok'; }));
-  router.post('/colectas/:id/confirm', organizerAction(async (ctx, o, c) => { await service.confirm(c, o); return 'confirmada'; }));
+  router.post('/colectas/:id/confirm', organizerAction(async (ctx, o, c) => {
+    await service.confirm(c, o, { acceptBelowGoal: ctx.body.acceptBelowGoal === '1' });
+    return 'confirmada';
+  }));
   router.post('/colectas/:id/outcome', organizerAction(async (ctx, o, c) => {
     const { action } = ctx.body;
     if (action === 'cancel') await service.cancel(c, o);

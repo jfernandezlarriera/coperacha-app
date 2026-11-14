@@ -302,6 +302,57 @@ test('milestones notify the organizer once at 50% and 75%', async () => {
   assert.deepEqual(events(sys, 'milestone').map((e) => e.args[1]), [50, 75]);
 });
 
+test('organizer can confirm below the goal only with an explicit flag; amounts stay at the original share', async () => {
+  const sys = makeSystem();
+  const c = await makeColecta(sys, { goalCents: 90000, splitMode: 'equal' });
+  const a = await join(sys, c, { mode: 'equal' });
+  const b = await join(sys, c, { mode: 'equal' });
+  const capped = await join(sys, c, { mode: 'majority_cap', capCents: 10000 });
+  assert.equal(sys.service.byId(c.id).status, 'open');
+  assert.equal(sys.service.summary(c.id).totalCents, 70000);
+
+  await assert.rejects(sys.service.confirm(sys.service.byId(c.id), sys.organizer), /meta/);
+  await assert.rejects(sys.service.confirm(sys.service.byId(c.id), sys.organizer, { acceptBelowGoal: false }), /meta/);
+  await assert.rejects(sys.service.confirm(sys.service.byId(c.id), sys.other, { acceptBelowGoal: true }), /acceso/);
+  assert.equal(sys.pey.charges.length, 0);
+  assert.equal(sys.service.byId(c.id).status, 'open');
+
+  const empty = await makeColecta(sys, { goalCents: 50000 });
+  await assert.rejects(sys.service.confirm(sys.service.byId(empty.id), sys.organizer, { acceptBelowGoal: true }), /aportaciones/);
+  assert.equal(sys.service.byId(empty.id).status, 'open');
+
+  const pending = await makeColecta(sys, { goalCents: 50000, clabe: OTHER_CLABE });
+  await join(sys, pending, { mode: 'fixed', fixedCents: 20000 });
+  await assert.rejects(sys.service.confirm(sys.service.byId(pending.id), sys.organizer, { acceptBelowGoal: true }), /active tu cuenta/);
+  assert.equal(sys.service.byId(pending.id).status, 'open');
+  assert.equal(sys.service.byId(pending.id).goalCents, 50000);
+  assert.equal(sys.service.byId(pending.id).confirmedBelowGoal, undefined);
+
+  const { charges, summary } = await sys.service.confirm(sys.service.byId(c.id), sys.organizer, { acceptBelowGoal: true });
+  const confirmed = sys.service.byId(c.id);
+  assert.equal(confirmed.status, 'confirmed');
+  assert.equal(confirmed.confirmedBelowGoal, true);
+  assert.equal(confirmed.originalGoalCents, 90000);
+  assert.equal(confirmed.goalCents, 70000);
+  assert.equal(sys.store.get('participants', a.id).finalCents, 30000, 'equal share stays at the original goal, not ceil(70000/3)');
+  assert.equal(sys.store.get('participants', b.id).finalCents, 30000);
+  assert.equal(sys.store.get('participants', capped.id).finalCents, 10000);
+  assert.equal(charges.length, 3);
+  assert.deepEqual(charges.map((ch) => ch.amountCents).sort((x, y) => x - y), [10000, 30000, 30000]);
+  assert.equal(sys.pey.charges.length, 3);
+  assert.equal(events(sys, 'confirmedBelowGoal').length, 1);
+  assert.equal(events(sys, 'charge').length, 3);
+  assert.deepEqual(sys.service.contributorList(sys.service.summary(c.id)), [
+    { name: a.name, amountCents: 30000 },
+    { name: b.name, amountCents: 30000 },
+    { name: capped.name, amountCents: 10000 },
+  ]);
+  const text = messages.confirmedBelowGoal(summary.colecta, a, 30000);
+  assert.match(text, /lo que se juntó/);
+  assert.match(text, /\$300\.00/);
+  assert.match(text, /\$700\.00 de \$900\.00/);
+});
+
 test('messages never use forbidden words', async () => {
   const { messages } = await import('../src/domain/messages.js');
   const text = JSON.stringify(Object.values(messages).map((m) => (typeof m === 'function' ? m.toString() : m)));

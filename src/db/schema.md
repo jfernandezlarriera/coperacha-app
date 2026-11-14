@@ -8,7 +8,7 @@ beneficiary of every charge.
 | Collection | Fields |
 |---|---|
 | `organizers` | `id`, `googleSub`, `email`, `name`, `createdAt` |
-| `colectas` | `id`, `code` (share link), `organizerId`, `organizerName`, `organizerPhone`, `clabe`, `giftIdea`, `goalCents`, `deadline`, `splitMode` (`equal` \| `free`), `status` (`open` \| `goal_reached` \| `confirmed` \| `failed` \| `cancelled`), `finalGift`, `winningProposalId`, `votingClosedAt`, `confirmedAt`, `failedAt`, `cancelledAt`, `milestonesNotified` (array of percentages), `reminderSentAt`, `createdAt`, `updatedAt` |
+| `colectas` | `id`, `code` (share link), `organizerId`, `organizerName`, `organizerPhone`, `clabe`, `giftIdea`, `goalCents`, `deadline`, `splitMode` (`equal` \| `free`), `status` (`open` \| `goal_reached` \| `confirmed` \| `failed` \| `cancelled`), `finalGift`, `winningProposalId`, `votingClosedAt`, `confirmedAt`, `failedAt`, `cancelledAt`, `milestonesNotified` (array of percentages), `reminderSentAt`, `createdAt`, `updatedAt`; when confirmed below the original goal also `originalGoalCents` and `confirmedBelowGoal` |
 | `participants` | `id`, `colectaId`, `name`, `phone` (digits), `chatId`, `mode` (`fixed` \| `equal` \| `majority_cap`), `fixedCents`, `capCents` (private), `finalCents` (set at confirmation), `joinedAt` |
 | `proposals` | `id`, `colectaId`, `title`, `proposedBy` (`p:<participantId>` \| `o:<organizerId>`), `createdAt` |
 | `votes` | `id`, `colectaId`, `voter` (same key format as `proposedBy`), `proposalId`, `updatedAt` |

@@ -166,6 +166,60 @@ test('a CLABE that is not preauthorized: 5-business-day copy, no confirm button 
   assert.match((await org(`/colectas/${colectaId}`)).text, /Cuenta para cobros: Error/);
 });
 
+test('organizer can confirm below the goal from the dashboard only with the explicit confirmation', async () => {
+  const org = client();
+  await org('/auth/dev', { method: 'POST', form: { name: 'Diego', email: 'diego@example.com' } });
+  let r = await org('/colectas', { method: 'POST', form: { giftIdea: 'Libro', goal: '900', deadline: deadlineInput, splitMode: 'equal', organizerName: 'Diego', organizerPhone: '5510002000', clabe: CLABE } });
+  const colectaId = r.location.split('/')[2].split('?')[0];
+  const colecta = sys.service.byId(colectaId);
+
+  r = await org(`/colectas/${colectaId}`);
+  assert.doesNotMatch(r.text, /Confirmar con lo que se juntó/, 'hidden when there are no participants');
+  r = await org(`/colectas/${colectaId}/confirm`, { method: 'POST', form: { acceptBelowGoal: '1' } });
+  assert.equal(r.status, 400);
+  assert.match(r.text, /aportaciones/);
+  assert.equal(sys.service.byId(colectaId).status, 'open');
+
+  await client()(`/c/${colecta.code}/join`, { method: 'POST', form: { name: 'Luis', phone: '5510002001', mode: 'equal' } });
+  await client()(`/c/${colecta.code}/join`, { method: 'POST', form: { name: 'Mar', phone: '5510002002', mode: 'equal' } });
+  await client()(`/c/${colecta.code}/join`, { method: 'POST', form: { name: 'Sol', phone: '5510002003', mode: 'majority_cap', cap: '100' } });
+  assert.equal(sys.service.byId(colectaId).status, 'open');
+  assert.equal(sys.service.summary(colectaId).totalCents, 70000);
+
+  r = await org(`/colectas/${colectaId}`);
+  assert.match(r.text, /Confirmar con lo que se juntó/);
+  assert.match(r.text, /\$700\.00 de \$900\.00/);
+  assert.doesNotMatch(r.text, /Sí, confirmar con/);
+  r = await org(`/colectas/${colectaId}/confirm`, { method: 'POST' });
+  assert.equal(r.status, 400, 'requires the explicit confirmation param');
+  assert.match(r.text, /meta/);
+  assert.equal(sys.service.byId(colectaId).status, 'open');
+  assert.equal(sys.service.charges(colectaId).length, 0);
+
+  const other = client();
+  await other('/auth/dev', { method: 'POST', form: { name: 'Eva', email: 'eva@example.com' } });
+  assert.equal((await other(`/colectas/${colectaId}/confirm`, { method: 'POST', form: { acceptBelowGoal: '1' } })).status, 404);
+
+  r = await org(`/colectas/${colectaId}?confirmBelow=1`);
+  assert.match(r.text, /Van \$700\.00 de \$900\.00/);
+  assert.match(r.text, /Nadie paga de más/);
+  assert.match(r.text, /Sí, confirmar con \$700\.00 y mandar cobros/);
+  const before = pey.charges.length;
+  r = await org(`/colectas/${colectaId}/confirm`, { method: 'POST', form: { acceptBelowGoal: '1' } });
+  assert.equal(r.location, `/colectas/${colectaId}?msg=confirmada`);
+  const confirmed = sys.service.byId(colectaId);
+  assert.equal(confirmed.status, 'confirmed');
+  assert.equal(confirmed.confirmedBelowGoal, true);
+  assert.equal(confirmed.originalGoalCents, 90000);
+  assert.equal(confirmed.goalCents, 70000);
+  assert.deepEqual(sys.service.charges(colectaId).map((ch) => ch.amountCents).sort((x, y) => x - y), [10000, 30000, 30000]);
+  assert.equal(pey.charges.length, before + 3);
+  r = await org(`/colectas/${colectaId}`);
+  assert.match(r.text, /Quién puso cuánto/);
+  assert.match(r.text, /se confirmó con lo que se juntó/i);
+  assert.match(r.text, /Sol<\/td><td>\$100\.00/);
+});
+
 test('GET /health answers 200 JSON without a session', async () => {
   for (const path of ['/health', '/healthz']) {
     const res = await fetch(`${base}${path}`);

@@ -1,5 +1,7 @@
 // Colecta lifecycle: create, join, propose/vote, evaluate goal, confirm (charges), deadline
-// outcomes. All-or-nothing: no charge exists until the organizer confirms a reached goal.
+// outcomes. No charge exists until the organizer confirms. The default path is all-or-nothing
+// (a reached goal). The organizer may also confirm an open colecta with the amount already
+// collected; amounts stay frozen at what each person was told under the original goal.
 import { newId, newCode } from '../util/ids.js';
 import { normalizePhone, chatIdForPhone } from '../util/phone.js';
 import { isValidClabe, normalizeClabe } from '../util/clabe.js';
@@ -266,22 +268,38 @@ export class ColectaService {
     }
   }
 
-  // Organizer confirms a reached goal: amounts freeze and CoDi charges go out.
-  async confirm(colecta, organizer) {
+  // Organizer confirms: amounts freeze and CoDi charges go out. The default path requires a
+  // reached goal. With acceptBelowGoal, an open colecta can be confirmed at the current
+  // committed total; amounts are frozen first against the original goal, so nobody pays more
+  // than they were told, then the goal is lowered to that total.
+  async confirm(colecta, organizer, { acceptBelowGoal = false } = {}) {
     this.assertOwner(colecta, organizer);
     const summary = this.evaluate(colecta.id);
-    if (summary.colecta.status !== STATUS.GOAL_REACHED) {
+    const belowGoal = summary.colecta.status === STATUS.OPEN && acceptBelowGoal;
+    if (belowGoal) {
+      if (summary.participantCount < 1 || summary.totalCents <= 0) {
+        throw new DomainError('Todavía no hay aportaciones para confirmar.', 409, 'no_participants');
+      }
+    } else if (summary.colecta.status !== STATUS.GOAL_REACHED) {
       throw new DomainError('Todavía no se llega a la meta.', 409, 'goal_not_reached');
     }
     if (summary.colecta.codiStatus !== 'ACTIVE' || !summary.colecta.bankAccountId) {
       throw new DomainError('Los cobros CoDi salen cuando Pey active tu cuenta. Te avisamos por WhatsApp en cuanto quede lista.', 409, 'bank_account_not_active');
     }
     const ts = this.now();
+    // Freeze amounts against the current (original) goal before any goal change.
     for (const p of summary.participants) {
       this.store.update('participants', p.id, { finalCents: this.amountFor(summary, p) });
     }
-    this.store.update('colectas', colecta.id, { status: STATUS.CONFIRMED, confirmedAt: ts, updatedAt: ts });
+    const patch = { status: STATUS.CONFIRMED, confirmedAt: ts, updatedAt: ts };
+    if (belowGoal) {
+      patch.originalGoalCents = summary.colecta.goalCents;
+      patch.confirmedBelowGoal = true;
+      patch.goalCents = summary.totalCents;
+    }
+    this.store.update('colectas', colecta.id, patch);
     const confirmed = this.summary(colecta.id);
+    if (belowGoal) await this.notifier.confirmedBelowGoal(confirmed.colecta, confirmed);
     const expiresAt = new Date(this.clock().getTime() + CHARGE_EXPIRATION_SECONDS * 1000).toISOString();
     const charges = [];
     for (const p of confirmed.participants) {

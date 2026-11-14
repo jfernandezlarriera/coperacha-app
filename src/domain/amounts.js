@@ -9,7 +9,9 @@
 // 4. A majority-cap participant pays min(majority amount, their private cap X).
 // 5. Running total (before confirmation) counts every participant at their current resolved
 //    amount, including majority-cap pledges at min(majority, X). Only the aggregate is shown.
-// 6. Amounts are frozen (finalCents) when the organizer confirms the colecta.
+// 6. Amounts are frozen (finalCents) when the organizer confirms the colecta. A below-goal
+//    confirmation still resolves against the original goal, then stores that total as the new
+//    goal; equal shares and majority-cap amounts are never recomputed upward or downward.
 
 export function equalShareCents(goalCents, participantCount) {
   if (participantCount <= 0) return goalCents;
