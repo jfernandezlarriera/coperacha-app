@@ -30,7 +30,7 @@ IMAGE_REPO="$ECR/$SERVICE"
 
 # Keys read from the secret's JSON. Names only: values never pass through this script's output.
 SECRET_KEYS_REQUIRED="SESSION_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URI ARTURITO_PHONE ARTURITO_SEND_URL ARTURITO_SEND_KEY ARTURITO_WEBHOOK_TOKEN ARTURITO_SEND_LIMIT_PER_MINUTE PEY_API_KEY PEY_WEBHOOK_SECRET"
-SECRET_KEYS_OPTIONAL="PEY_API_URL"
+SECRET_KEYS_OPTIONAL="PEY_API_URL CONTACT_TO"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 for tool in aws docker git node; do command -v "$tool" >/dev/null || die "$tool is required."; done
@@ -151,7 +151,8 @@ cat > "$TMP/source.json" <<EOF
         "AUTH_DEV_LOGIN": "false",
         "AWS_REGION": "$REGION",
         "DATABASE_S3_BUCKET": "$BUCKET",
-        "DATABASE_S3_KEY": "$DB_KEY"
+        "DATABASE_S3_KEY": "$DB_KEY",
+        "CONTACT_FROM": "Coperacha <hola@coperacha.app>"
       },
       "RuntimeEnvironmentSecrets": {$SECRETS_JSON}
     }

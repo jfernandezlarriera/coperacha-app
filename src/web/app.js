@@ -11,6 +11,7 @@ import { DomainError } from '../domain/errors.js';
 import { upsertOrganizer, newState } from '../auth/google.js';
 import { PeyWebhookError } from '../integrations/pey.js';
 import { log } from '../logger.js';
+import { validateContact, RateLimiter, clientIp, buildContactEmail } from './contact.js';
 
 const SESSION_COOKIE = 'cp_session';
 const PARTICIPANT_COOKIE = 'cp_participant';
@@ -22,7 +23,7 @@ function bearerOk(header, expected) {
   return token.length === expected.length && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected));
 }
 
-export function buildApp({ config, store, service, inbound, pey, googleAuth, queue }) {
+export function buildApp({ config, store, service, inbound, pey, googleAuth, queue, mailer, contactLimiter = new RateLimiter() }) {
   const router = new Router();
   const secret = config.sessionSecret;
   const authDev = config.authDevLogin;
@@ -260,6 +261,38 @@ export function buildApp({ config, store, service, inbound, pey, googleAuth, que
   };
   router.post('/c/:code/proposals', participantAction((ctx, p, c) => service.propose(c, `p:${p.id}`, ctx.body.title)));
   router.post('/c/:code/vote', participantAction((ctx, p, c) => service.vote(c, `p:${p.id}`, ctx.body.proposalId)));
+
+  // ----- landing contact form -----
+  // JSON for the landing's fetch (Accept: application/json), redirect back to the landing for
+  // plain form posts. Logs carry only the outcome, never the name, email or message.
+  router.post('/contact', async (ctx) => {
+    const origin = String(ctx.req.headers.origin || '').replace(/\/+$/, '');
+    const allowed = [...config.contact.allowedOrigins, config.baseUrl];
+    const cors = origin && allowed.includes(origin) ? { 'access-control-allow-origin': origin, vary: 'Origin' } : { vary: 'Origin' };
+    const wantsJson = String(ctx.req.headers.accept || '').includes('application/json');
+    const reply = (status, ok, error) => {
+      if (wantsJson) {
+        ctx.res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...cors });
+        return ctx.res.end(JSON.stringify(ok ? { ok: true } : { ok: false, error }));
+      }
+      return ctx.redirect(`${config.contact.landingUrl}/?contacto=${ok ? 'enviado' : 'error'}#contacto`);
+    };
+    if (origin && !allowed.includes(origin)) { log.warn('contact.rejected', { reason: 'origin' }); return reply(403, false, 'No pudimos enviar tu mensaje.'); }
+    if (!config.contact.to || !mailer) { log.warn('contact.rejected', { reason: 'disabled' }); return reply(503, false, 'El formulario no está disponible por ahora. Intenta más tarde.'); }
+    // Honeypot: people never see the "website" field; bots fill it. Pretend it worked.
+    if (String(ctx.body.website || '').trim()) { log.info('contact.rejected', { reason: 'honeypot' }); return reply(200, true); }
+    const checked = validateContact(ctx.body);
+    if (!checked.ok) { log.info('contact.rejected', { reason: 'invalid' }); return reply(400, false, checked.error); }
+    if (!contactLimiter.allow(clientIp(ctx.req))) { log.warn('contact.rejected', { reason: 'rate_limit' }); return reply(429, false, 'Recibimos varios mensajes seguidos. Intenta de nuevo en unos minutos.'); }
+    try {
+      const { messageId } = await mailer.send(buildContactEmail(checked.value, config.contact));
+      log.info('contact.sent', { messageId });
+      return reply(200, true);
+    } catch (err) {
+      log.error('contact.error', { status: err?.status, code: err?.code || err?.name });
+      return reply(502, false, 'No pudimos enviar tu mensaje. Intenta de nuevo en un rato.');
+    }
+  });
 
   // ----- webhooks -----
   router.post('/webhooks/arturito', async (ctx) => {

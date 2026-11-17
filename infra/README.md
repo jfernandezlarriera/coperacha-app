@@ -38,7 +38,7 @@ se imprimen ni se guardan. App Runner los inyecta como variables de entorno al a
 | Repositorio ECR | `coperacha-app` (tags: sha corto y `latest`) |
 | Servicio App Runner | `coperacha-app` (0.25 vCPU, 0.5 GB, puerto 3000, health check HTTP `/health`, sin auto-deploy) |
 | Auto scaling | `coperacha-app-single` (mínimo 1, máximo 1) |
-| Rol de instancia | `coperacha-app-instance` (lee el secreto; Get/Put del objeto de datos) |
+| Rol de instancia | `coperacha-app-instance` (lee el secreto; Get/Put del objeto de datos; envía correo SES sólo desde `hola@coperacha.app`) |
 | Rol de acceso a ECR | `coperacha-app-ecr-access` (pull de la imagen) |
 | Bucket de datos | `coperacha-app-data-355622872251`, objeto `prod/coperacha.json` (privado, versionado) |
 | Secreto | `coperacha-app/prod` (sólo lectura) |
@@ -51,7 +51,14 @@ Las políticas IAM están en `infra/policies/` con marcadores (`__SECRET_ARN__`,
 Variables no secretas que configura el script: `PORT=3000`,
 `APP_BASE_URL=https://app.coperacha.app`, `COOKIE_SECURE=true`,
 `APP_TIMEZONE=America/Mexico_City`, `PEY_MODE=http`, `AUTH_DEV_LOGIN=false`, `AWS_REGION`,
-`DATABASE_S3_BUCKET`, `DATABASE_S3_KEY`.
+`DATABASE_S3_BUCKET`, `DATABASE_S3_KEY`, `CONTACT_FROM`.
+
+## Formulario de contacto
+
+`POST /contact` (lo usa la landing) manda un correo con Amazon SES (us-east-2) desde
+`hola@coperacha.app` (dominio verificado con DKIM en Route 53) a `CONTACT_TO`, una llave
+opcional del secreto (no va en el repo). Sin `CONTACT_TO` el endpoint responde 503. Mientras la
+cuenta de SES siga en sandbox sólo entrega a direcciones verificadas en SES.
 
 ## Dominio
 

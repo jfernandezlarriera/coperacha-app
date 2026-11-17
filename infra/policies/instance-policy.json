@@ -4,6 +4,9 @@
     {"Sid": "ReadAppSecret", "Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "__SECRET_ARN__"},
     {"Sid": "ReadWriteStoreObject", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"],
      "Resource": "arn:aws:s3:::__BUCKET__/__KEY__"},
-    {"Sid": "TellMissingObjectFromDenied", "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::__BUCKET__"}
+    {"Sid": "TellMissingObjectFromDenied", "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::__BUCKET__"},
+    {"Sid": "SendContactEmail", "Effect": "Allow", "Action": ["ses:SendEmail", "ses:SendRawEmail"],
+     "Resource": "arn:aws:ses:us-east-2:355622872251:identity/*",
+     "Condition": {"StringLike": {"ses:FromAddress": "*hola@coperacha.app*"}}}
   ]
 }

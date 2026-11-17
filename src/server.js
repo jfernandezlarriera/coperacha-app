@@ -7,6 +7,7 @@ import { Notifier } from './services/notifier.js';
 import { OutboundQueue } from './integrations/outbound-queue.js';
 import { HttpArturitoClient, MockArturitoClient } from './integrations/arturito.js';
 import { HttpPeyClient, MockPeyClient } from './integrations/pey.js';
+import { SesMailer, MockMailer } from './integrations/mailer.js';
 import { GoogleAuth } from './auth/google.js';
 import { InboundHandler } from './whatsapp/inbound.js';
 import { buildApp } from './web/app.js';
@@ -25,8 +26,9 @@ export function buildSystem(config, overrides = {}) {
   const service = new ColectaService({ store, notifier, pey, arturito, clock: overrides.clock });
   const inbound = new InboundHandler({ service });
   const googleAuth = overrides.googleAuth || new GoogleAuth(config.google);
-  const { server } = buildApp({ config, store, service, inbound, pey, googleAuth, queue });
-  return { store, arturito, queue, notifier, pey, service, inbound, googleAuth, server };
+  const mailer = overrides.mailer || (config.contact.to ? new SesMailer({ region: config.awsRegion }) : new MockMailer());
+  const { server } = buildApp({ config, store, service, inbound, pey, googleAuth, queue, mailer, contactLimiter: overrides.contactLimiter });
+  return { store, arturito, queue, notifier, pey, service, inbound, googleAuth, mailer, server };
 }
 
 // One timer for both sweeps. `pollPey` (PEY_MODE=http) also asks Pey for accounts that are
@@ -56,7 +58,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const system = buildSystem(config, { store });
   startDeadlineJob(system.service, 60_000, { pollPey: config.pey.mode === 'http' });
   system.server.listen(config.port, () => {
-    log.info('server.listening', { port: config.port, baseUrl: config.baseUrl, pey: config.pey.mode, arturitoSend: Boolean(config.arturito.sendUrl), s3Store: Boolean(config.databaseS3Bucket) });
+    log.info('server.listening', { port: config.port, baseUrl: config.baseUrl, pey: config.pey.mode, arturitoSend: Boolean(config.arturito.sendUrl), s3Store: Boolean(config.databaseS3Bucket), contact: Boolean(config.contact.to) });
   });
   // App Runner sends SIGTERM on every deploy: stop accepting requests and give pending
   // store uploads a few seconds to finish.

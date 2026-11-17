@@ -54,6 +54,14 @@ export function buildConfig(env = process.env) {
       apiKey: env.PEY_API_KEY || '',
       webhookSecret: env.PEY_WEBHOOK_SECRET || '',
     },
+    // Landing contact form. Empty CONTACT_TO disables POST /contact (it answers 503).
+    contact: {
+      to: env.CONTACT_TO || '',
+      from: env.CONTACT_FROM || 'Coperacha <hola@coperacha.app>',
+      landingUrl: (env.CONTACT_LANDING_URL || 'https://coperacha.app').replace(/\/+$/, ''),
+      allowedOrigins: (env.CONTACT_ALLOWED_ORIGINS || 'https://coperacha.app,https://www.coperacha.app')
+        .split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean),
+    },
   };
 }
 
