@@ -6,7 +6,8 @@ only.
 
 Inherits the Coperacha area rules from `~/Work/Coperacha/AGENTS.md` (and `~/Work/AGENTS.md`).
 User-facing copy is Mexican Spanish (tú). Code, comments, commits, and file names are in
-English. Do not mention any hackathon in the product, README, or comments.
+English. Never name the hackathon (event or organizer) in the product, README, or comments; the only
+mention is the generic prototype notice in `src/util/html.js` («creado en una hackatón»), approved by JI.
 
 Do not deploy, and do not change AWS or production config, unless JI explicitly asked.
 

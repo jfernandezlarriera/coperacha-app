@@ -256,3 +256,14 @@ test('session cookies are httpOnly and signed; tampering logs you out', async ()
   const bad = await fetch(`${base}/dashboard`, { headers: { cookie: value.slice(0, -2) + 'zz' }, redirect: 'manual' });
   assert.equal(bad.status, 303);
 });
+
+test('every page shows the prototype notice linking to the landing contact form', async () => {
+  for (const path of ['/', '/auth/dev', '/no-such-colecta-page']) {
+    const res = await fetch(base + path, { redirect: 'manual' });
+    const html = await res.text();
+    if (res.status === 404 && !html.includes('<header>')) continue;
+    assert.match(html, /Coperacha es un prototipo creado en una hackatón\./);
+    assert.match(html, /href="https:\/\/coperacha\.app\/#contacto">Escríbenos<\/a>/);
+    assert.doesNotMatch(html, /Hackatón México/i);
+  }
+});

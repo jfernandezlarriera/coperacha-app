@@ -39,8 +39,13 @@ table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px 6px;
 code{background:#eef1ee;padding:2px 6px;border-radius:6px;word-break:break-all}
 ul.plain{list-style:none;padding:0}ul.plain li{padding:8px 0;border-bottom:1px solid var(--line)}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.prototype-notice{margin:0;padding:8px 20px;background:#f1f4ef;border-bottom:1px solid var(--line);color:#5c6b66;font-size:.85rem;line-height:1.4;text-align:center}
+.prototype-notice a{color:var(--green);font-weight:600}
 small{color:#5c6b66}
 `;
+
+// Shown on every page, right under the header; plain text, never blocks a flow.
+export const PROTOTYPE_NOTICE = '<p class="prototype-notice" role="note">Coperacha es un prototipo creado en una hackatón. Puedes probarlo, pero todavía no es un servicio en producción: estamos haciendo pruebas para decidir cómo seguir. ¿Te interesa? <a href="https://coperacha.app/#contacto">Escríbenos</a>.</p>';
 
 export function layout({ title, body, nav = '' }) {
   return `<!doctype html>
@@ -53,6 +58,7 @@ export function layout({ title, body, nav = '' }) {
 </head>
 <body>
 <header><a href="/">Coperacha</a><nav>${nav}</nav></header>
+${PROTOTYPE_NOTICE}
 <main>${body}</main>
 </body>
 </html>`;
